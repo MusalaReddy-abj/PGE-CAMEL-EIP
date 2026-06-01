@@ -13,7 +13,7 @@ public class ProfileReadsFtpProperties {
     private String             remoteDirectory = "/incoming";
     private String             moveDirectory   = ".done";
     private String             errorDirectory  = ".error";
-    private String             include         = "*.csv";
+    private String             include         = ".*\\.csv";
     private int                delayMs         = 60000;
     private boolean            binary          = true;
     private boolean            passiveMode     = true;
@@ -30,7 +30,8 @@ public class ProfileReadsFtpProperties {
             + "&delay=" + delayMs
             + "&move=" + normalizeMovePath(moveDirectory)
             + "&readLock=" + readLock
-            + "&readLockMinAge=" + readLockMinAgeMs;
+            + "&readLockMinAge=" + readLockMinAgeMs
+            + "&moveFailed=" + normalizeMovePath(errorDirectory);
     }
 
     private String normalizeDirectory(String directory) {
