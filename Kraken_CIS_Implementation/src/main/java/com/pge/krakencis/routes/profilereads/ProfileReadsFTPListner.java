@@ -71,6 +71,10 @@ public class ProfileReadsFTPListner extends BaseRoute {
         from(ftpProperties.buildUri())
             .routeId("route-profile-reads-ftp")
             .description("Poll ProfileReads CSV files from FTP, parse each row, publish to Kafka")
+            // threadPoolSize allows multiple downloaded files to be processed concurrently.
+            // The FTP consumer still polls one file at a time; .threads() decouples
+            // downstream processing so the next poll can start while prior files are in-flight.
+            .threads(ftpProperties.getThreadPoolSize())
             .process(correlationIdProcessor)
             .process(routeLoggingProcessor.entry(OPERATION))
             .process(profileReadsCsvProcessor)

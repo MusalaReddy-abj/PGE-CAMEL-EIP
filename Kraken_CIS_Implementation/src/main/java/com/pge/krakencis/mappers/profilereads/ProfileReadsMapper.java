@@ -29,7 +29,6 @@ public class ProfileReadsMapper {
         }
 
         List<ProfileReadPayload> payloads = new ArrayList<>();
-        Map<String, Integer> headerIndex = null;
         int rowCount = 0;
 
         try (Scanner scanner = new Scanner(csvBody)) {
@@ -37,16 +36,14 @@ public class ProfileReadsMapper {
                 throw ValidationException.missingField("FTP CSV header", correlationId);
             }
 
-            // Parse header
             String headerLine = scanner.nextLine().trim();
-            headerIndex = buildHeaderIndex(headerLine);
+            Map<String, Integer> headerIndex = buildHeaderIndex(headerLine);
             validateHeaders(headerIndex, correlationId);
 
-            // Process data rows line-by-line
             while (scanner.hasNextLine()) {
                 String line = scanner.nextLine().trim();
                 if (!line.isEmpty()) {
-                    payloads.add(toPayload(line, headerIndex, correlationId));
+                    payloads.add(parseRow(line, headerIndex, correlationId));
                     rowCount++;
                 }
             }
@@ -59,7 +56,7 @@ public class ProfileReadsMapper {
         return payloads;
     }
 
-    private Map<String, Integer> buildHeaderIndex(String headerLine) {
+    public Map<String, Integer> buildHeaderIndex(String headerLine) {
         String[] headers = parseCsvLine(headerLine);
         Map<String, Integer> headerIndex = new LinkedHashMap<>();
         for (int i = 0; i < headers.length; i++) {
@@ -68,7 +65,7 @@ public class ProfileReadsMapper {
         return headerIndex;
     }
 
-    private void validateHeaders(Map<String, Integer> headerIndex, String correlationId) {
+    public void validateHeaders(Map<String, Integer> headerIndex, String correlationId) {
         List<String> missingHeaders = new ArrayList<>();
         for (String header : REQUIRED_HEADERS) {
             if (!headerIndex.containsKey(header)) {
@@ -82,7 +79,7 @@ public class ProfileReadsMapper {
         }
     }
 
-    private ProfileReadPayload toPayload(String line, Map<String, Integer> headerIndex, String correlationId) {
+    public ProfileReadPayload parseRow(String line, Map<String, Integer> headerIndex, String correlationId) {
         String[] fields = parseCsvLine(line);
 
         return ProfileReadPayload.builder()
