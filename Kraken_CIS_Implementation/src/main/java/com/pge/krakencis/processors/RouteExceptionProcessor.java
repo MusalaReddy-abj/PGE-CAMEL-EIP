@@ -12,17 +12,25 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Reusable exception processor for any Camel route.
+ * Factory for typed Camel {@link org.apache.camel.Processor} instances that convert
+ * domain exceptions into structured JSON error responses.
  *
- * Usage in any RouteBuilder:
- *   .onException(ValidationException.class)
- *       .handled(true).process(exceptionProcessor.validation("myOperation")).end()
- *   .onException(TransformationException.class)
- *       .handled(true).process(exceptionProcessor.transformation("myOperation")).end()
- *   .onException(KrakenBaseException.class)
- *       .handled(true).process(exceptionProcessor.domain("myOperation")).end()
- *   .onException(Exception.class)
- *       .handled(true).process(exceptionProcessor.system("myOperation")).end()
+ * <p>Intended to be used exclusively through {@link com.pge.krakencis.routes.BaseRoute}.
+ * Each factory method returns a {@code Processor} that:
+ * <ol>
+ *   <li>Extracts the exception from {@code Exchange.EXCEPTION_CAUGHT}.</li>
+ *   <li>Logs the failure via {@link com.pge.krakencis.logging.AuditLogger}.</li>
+ *   <li>Sets an appropriate HTTP status code and a JSON body containing
+ *       {@code errorCode} and {@code message}.</li>
+ * </ol>
+ *
+ * <h3>HTTP status mapping</h3>
+ * <ul>
+ *   <li>{@link com.pge.krakencis.exceptions.ValidationException} → 400</li>
+ *   <li>{@link com.pge.krakencis.exceptions.TransformationException} → 422</li>
+ *   <li>{@link com.pge.krakencis.exceptions.KrakenBaseException} → 500</li>
+ *   <li>{@link Exception} → 500 with code {@code SYS-001}</li>
+ * </ul>
  */
 @Component
 public class RouteExceptionProcessor {

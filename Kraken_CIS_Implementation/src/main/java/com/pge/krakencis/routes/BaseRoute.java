@@ -8,7 +8,6 @@ import com.pge.krakencis.processors.CorrelationIdProcessor;
 import com.pge.krakencis.processors.RouteExceptionProcessor;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.model.RouteDefinition;
-import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.function.Consumer;
 
@@ -35,21 +34,23 @@ import java.util.function.Consumer;
  */
 public abstract class BaseRoute extends RouteBuilder {
 
-    @Autowired
-    private CorrelationIdProcessor  correlationIdProcessor;
+    protected final CorrelationIdProcessor  correlationIdProcessor;
+    protected final RouteLoggingProcessor   routeLoggingProcessor;
+    protected final RouteExceptionProcessor exceptionProcessor;
 
-    @Autowired
-    private RouteLoggingProcessor   routeLoggingProcessor;
-
-    @Autowired
-    private RouteExceptionProcessor exceptionProcessor;
+    protected BaseRoute(CorrelationIdProcessor  correlationIdProcessor,
+                        RouteLoggingProcessor   routeLoggingProcessor,
+                        RouteExceptionProcessor exceptionProcessor) {
+        this.correlationIdProcessor = correlationIdProcessor;
+        this.routeLoggingProcessor  = routeLoggingProcessor;
+        this.exceptionProcessor     = exceptionProcessor;
+    }
 
     protected void processingRoute(String fromUri, String routeId, String operation,
                                     Consumer<RouteDefinition> businessSteps) {
 
         RouteDefinition route = from(fromUri).routeId(routeId);
 
-        // ── Exception handlers ─────────────────────────────────────────────
         route.onException(ValidationException.class)
             .handled(true).process(exceptionProcessor.validation(operation)).end();
 
@@ -62,14 +63,11 @@ public abstract class BaseRoute extends RouteBuilder {
         route.onException(Exception.class)
             .handled(true).process(exceptionProcessor.system(operation)).end();
 
-        // ── Cross-cutting entry ────────────────────────────────────────────
         route.process(correlationIdProcessor)
              .process(routeLoggingProcessor.entry(operation));
 
-        // ── Route-specific business steps ──────────────────────────────────
         businessSteps.accept(route);
 
-        // ── Cross-cutting exit ─────────────────────────────────────────────
         route.process(routeLoggingProcessor.exit(operation));
     }
 }

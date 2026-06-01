@@ -7,6 +7,19 @@ import com.pge.krakencis.services.SOARCDCRequestService;
 import org.apache.camel.Exchange;
 import org.springframework.stereotype.Component;
 
+/**
+ * Delegates the outbound HTTP call to the SOA-RCDC target service.
+ *
+ * <p>Reads the pre-serialised JSON payload from the exchange body, calls
+ * {@link com.pge.krakencis.services.SOARCDCRequestService#sendCommand}, and stores
+ * the returned HTTP status code as the {@code Exchange.HTTP_RESPONSE_CODE} header
+ * for inspection by the downstream
+ * {@link RcdcTargetResponseProcessor}.
+ *
+ * <p>This processor does not interpret the status code — it only delegates and
+ * records it. Non-2xx handling is the sole responsibility of
+ * {@link RcdcTargetResponseProcessor}.
+ */
 @Component
 public class RcdcTargetCallProcessor extends BaseProcessor {
 

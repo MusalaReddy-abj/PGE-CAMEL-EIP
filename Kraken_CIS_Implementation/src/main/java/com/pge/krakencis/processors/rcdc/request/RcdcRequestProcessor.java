@@ -9,6 +9,23 @@ import com.pge.krakencis.processors.BaseProcessor;
 import org.apache.camel.Exchange;
 import org.springframework.stereotype.Component;
 
+/**
+ * Validates an inbound {@link com.pge.krakencis.models.rcdc.request.RcdcRequest}
+ * and seeds the exchange with the values that downstream processors depend on.
+ *
+ * <p>Validation is performed eagerly: every required field is checked before any
+ * exchange property is written. A missing or invalid field throws a
+ * {@link com.pge.krakencis.exceptions.ValidationException}, which the enclosing
+ * route's exception handler maps to an HTTP 400 response.
+ *
+ * <p>Exchange properties written by this processor:
+ * <ul>
+ *   <li>{@code X-Correlation-ID} — from {@code header.correlationID}</li>
+ *   <li>{@code rcdc.mRID} — meter identifier from the switch-state payload</li>
+ *   <li>{@code rcdc.state} — resolved {@link com.pge.krakencis.models.rcdc.request.RcdcState}
+ *       enum name ({@code CONNECT} or {@code DISCONNECT})</li>
+ * </ul>
+ */
 @Component
 public class RcdcRequestProcessor extends BaseProcessor {
 
@@ -57,9 +74,10 @@ public class RcdcRequestProcessor extends BaseProcessor {
         try {
             return RcdcState.from(state);
         } catch (IllegalArgumentException e) {
-            throw (ValidationException) ValidationException
-                .invalidFormat("state", "CONNECT | DISCONNECT", correlationId)
-                .withContext("providedValue", state);
+            ValidationException ex = ValidationException
+                .invalidFormat("state", "CONNECT | DISCONNECT", correlationId);
+            ex.withContext("providedValue", state);
+            throw ex;
         }
     }
 }

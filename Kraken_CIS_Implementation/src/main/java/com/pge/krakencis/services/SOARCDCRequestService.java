@@ -6,9 +6,19 @@ import com.pge.krakencis.logging.StructuredLogger;
 import org.springframework.stereotype.Service;
 
 /**
- * Service for all outbound calls to the SOA RCDC target service.
- * URL, timeout, and content-type are read from ExternalServiceProperties
- * so they can be overridden per environment without touching this class.
+ * Sends RCDC (Remote Connect/Disconnect Command) JSON payloads to the downstream
+ * SOA-RCDC target service over HTTP.
+ *
+ * <p>All connection parameters (URL, timeout, content-type) are resolved at
+ * call time from {@link ExternalServiceProperties} under the key {@code rcdc},
+ * so the endpoint can be overridden per deployment profile without modifying code.
+ *
+ * <p>Usage:
+ * <pre>{@code
+ * int status = soaRcdcRequestService.sendCommand(jsonPayload, correlationId);
+ * }</pre>
+ *
+ * @see com.pge.krakencis.processors.rcdc.request.RcdcTargetCallProcessor
  */
 @Service
 public class SOARCDCRequestService {

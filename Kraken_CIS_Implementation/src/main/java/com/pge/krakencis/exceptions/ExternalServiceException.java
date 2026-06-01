@@ -52,11 +52,12 @@ public class ExternalServiceException extends KrakenBaseException {
 
     public static ExternalServiceException httpError(String serviceName, int statusCode,
                                                       String body, String correlationId) {
-        return (ExternalServiceException) new ExternalServiceException(
+        ExternalServiceException ex = new ExternalServiceException(
             ErrorCode.EXTERNAL_SERVICE_ERROR,
             serviceName,
             String.format("%s returned HTTP %d", serviceName, statusCode),
-            correlationId, statusCode, null)
-            .withContext("responseBody", body);
+            correlationId, statusCode, null);
+        ex.withContext("responseBody", body);
+        return ex;
     }
 }
