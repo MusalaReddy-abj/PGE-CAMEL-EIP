@@ -1,0 +1,15 @@
+target/
+*.class
+*.jar
+*.war
+*.ear
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+logs/*.log
+config/prod/application-prod.yml
+src/main/resources/ssl/*.jks
+src/main/resources/ssl/*.p12

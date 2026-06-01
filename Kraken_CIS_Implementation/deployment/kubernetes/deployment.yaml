@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kraken-cis-implementation
+  labels:
+    app: kraken-cis
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kraken-cis
+  template:
+    metadata:
+      labels:
+        app: kraken-cis
+    spec:
+      containers:
+        - name: kraken-cis
+          image: kraken-cis-implementation:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: prod
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kraken-cis-service
+spec:
+  selector:
+    app: kraken-cis
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP

@@ -1,0 +1,55 @@
+spring:
+  application:
+    name: kraken-cis-implementation
+  profiles:
+    active: dev
+  config:
+    import: optional:classpath:kafka.yml,optional:classpath:ftp.yml
+
+# Spring Boot embedded server (Actuator management endpoints only)
+server:
+  port: 9081
+
+# Camel Undertow REST API (main application port)
+rest:
+  host: 0.0.0.0
+  port: 9080
+
+# External service endpoints — all outbound target URLs configured here.
+# Override per environment in config/{env}/application-{env}.yml
+external-services:
+  services:
+    rcdc:
+      url: http://localhost:8082/api/rcdc/command
+      timeout: 30000
+      content-type: application/json
+    rcdc-mdm-notification:
+      url: http://localhost:8083/ws/RCDSwitchState
+      timeout: 30000
+      content-type: "text/xml; charset=utf-8"
+
+camel:
+  springboot:
+    name: KrakenCISContext
+    stream-caching-enabled: true
+  main:
+    auto-startup: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,camelroutes,camelstats
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.pge.krakencis: DEBUG
+    org.apache.camel: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/kraken-cis.log

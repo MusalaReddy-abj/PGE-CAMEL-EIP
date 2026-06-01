@@ -1,0 +1,5 @@
+kafka:
+  producer:
+    brokers: uat-kafka-broker:9092
+  topic:
+    alarms: kraken-alarm-events-uat

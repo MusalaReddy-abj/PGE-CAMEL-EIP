@@ -1,0 +1,27 @@
+spring:
+  config:
+    import: optional:file:config/dev/kafka.yml
+  datasource:
+    url: jdbc:postgresql://localhost:5432/kraken_dev
+    username: dev_user
+    password: dev_pass
+
+rest:
+  host: 0.0.0.0
+  port: 8080
+
+external-services:
+  services:
+    rcdc:
+      url: http://dev-rcdc-service:8082/api/rcdc/command
+      timeout: 30000
+      content-type: application/json
+    rcdc-mdm-notification:
+      url: http://dev-mdm-service:8083/ws/RCDSwitchState
+      timeout: 30000
+      content-type: "text/xml; charset=utf-8"
+
+kraken:
+  api:
+    base-url: https://kraken-dev.company.com/api
+    timeout: 30000

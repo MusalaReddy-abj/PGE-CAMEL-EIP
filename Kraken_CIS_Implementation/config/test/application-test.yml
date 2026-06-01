@@ -1,0 +1,23 @@
+spring:
+  config:
+    import: optional:file:config/test/kafka.yml
+  datasource:
+    url: jdbc:postgresql://test-db:5432/kraken_test
+    username: test_user
+    password: test_pass
+
+rest:
+  host: 0.0.0.0
+  port: 8081
+
+external-services:
+  services:
+    rcdc:
+      url: http://test-rcdc-service:8082/api/rcdc/command
+      timeout: 30000
+      content-type: application/json
+
+kraken:
+  api:
+    base-url: https://kraken-test.company.com/api
+    timeout: 30000

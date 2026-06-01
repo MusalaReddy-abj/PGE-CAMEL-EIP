@@ -1,0 +1,17 @@
+ftp:
+  common:
+    host: localhost
+    port: 21
+    username: anonymous
+    password: anonymous
+
+  profile-reads:
+    remote-directory: /Reads/profilereads
+    move-directory: /Reads/Archive
+    error-directory: /Reads/Error
+    include: "*.csv"
+    delay-ms: 60000
+    binary: true
+    passive-mode: true
+    read-lock: changed
+    read-lock-min-age-ms: 1000

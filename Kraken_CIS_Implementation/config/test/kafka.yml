@@ -1,0 +1,5 @@
+kafka:
+  producer:
+    brokers: test-kafka-broker:9092
+  topic:
+    alarms: kraken-alarm-events-test

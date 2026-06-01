@@ -1,0 +1,23 @@
+kafka:
+  producer:
+    brokers: localhost:9092
+    acks: all
+    retries: 3
+    request-timeout-ms: 30000
+    linger-ms: 5
+    compression-type: lz4
+    key-serializer: org.apache.kafka.common.serialization.StringSerializer
+    value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+  consumer:
+    group-id: kraken-cis-group
+    auto-offset-reset: earliest
+    enable-auto-commit: false
+    max-poll-records: 500
+    session-timeout-ms: 30000
+
+  topic:
+    alarms:             kraken-alarm-events
+    rcdc:               kraken-rcdc-events
+    rcdc-hes-response:  kraken-rcdc-hes-response-events
+    profile-reads:      kraken-profile-reads-events
