@@ -24,21 +24,23 @@ public class ValidationException extends KrakenBaseException {
     }
 
     public static ValidationException missingField(String fieldName, String correlationId) {
-        return (ValidationException) new ValidationException(
+        ValidationException ex = new ValidationException(
             ErrorCode.MISSING_REQUIRED_FIELD,
             "Required field is missing: " + fieldName,
-            correlationId)
-            .withContext("field", fieldName);
+            correlationId);
+        ex.withContext("field", fieldName);
+        return ex;
     }
 
     public static ValidationException invalidFormat(String fieldName, String expectedFormat,
                                                      String correlationId) {
-        return (ValidationException) new ValidationException(
+        ValidationException ex = new ValidationException(
             ErrorCode.INVALID_FORMAT,
             String.format("Field '%s' does not match expected format: %s", fieldName, expectedFormat),
-            correlationId)
-            .withContext("field", fieldName)
-            .withContext("expectedFormat", expectedFormat);
+            correlationId);
+        ex.withContext("field",          fieldName);
+        ex.withContext("expectedFormat", expectedFormat);
+        return ex;
     }
 
     public static ValidationException multipleViolations(List<String> violations,

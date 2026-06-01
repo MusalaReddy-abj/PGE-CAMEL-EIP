@@ -13,6 +13,19 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 
+/**
+ * Validates and maps an inbound {@link com.pge.krakencis.models.alarms.AlarmRequest}
+ * to a list of {@link com.pge.krakencis.models.KrakenEvent} objects ready for Kafka
+ * publishing.
+ *
+ * <p>Every event in the payload is individually validated for the presence of
+ * {@code deviceIdentifierNumber}, {@code category}, and {@code createdDateTime}.
+ * A missing value on any event throws a
+ * {@link com.pge.krakencis.exceptions.ValidationException} (HTTP 400).
+ *
+ * <p>On success, the exchange body is replaced with the mapped
+ * {@code List<KrakenEvent>} for downstream serialisation and Kafka publish.
+ */
 @Component
 public class AlarmEventProcessor extends BaseProcessor {
 

@@ -25,3 +25,7 @@ kraken:
   api:
     base-url: https://kraken-dev.company.com/api
     timeout: 30000
+
+ftp:
+  profile-reads:
+    include: ".*\\.csv"

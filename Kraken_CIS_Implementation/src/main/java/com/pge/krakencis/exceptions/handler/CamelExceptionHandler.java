@@ -7,14 +7,14 @@ import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.StructuredLogger;
 import org.apache.camel.Exchange;
 import org.apache.camel.builder.RouteBuilder;
-import org.springframework.stereotype.Component;
 
 /**
- * Central Camel exception handler. Add to any RouteBuilder via:
- *   include(new CamelExceptionHandler());
- * or extend BaseRoute which calls this automatically.
+ * @deprecated Superseded by per-route handlers in BaseRoute.processingRoute() and
+ *             by doTry/doCatch blocks in Kafka consumer routes. Keeping the source
+ *             for reference only — remove this file when all routes use BaseRoute.
+ *
+ *             @Component is intentionally absent so Spring does not load this bean.
  */
-@Component
 public class CamelExceptionHandler extends RouteBuilder {
 
     private static final StructuredLogger log = StructuredLogger.of(CamelExceptionHandler.class);

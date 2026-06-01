@@ -1,13 +1,27 @@
 package com.pge.krakencis.routes.alarms;
 
 import com.pge.krakencis.logging.LogConstants;
+import com.pge.krakencis.logging.RouteLoggingProcessor;
 import com.pge.krakencis.models.alarms.AlarmRequest;
+import com.pge.krakencis.processors.CorrelationIdProcessor;
+import com.pge.krakencis.processors.RouteExceptionProcessor;
 import com.pge.krakencis.processors.alarms.AlarmEventProcessor;
 import com.pge.krakencis.processors.alarms.AlarmResponseProcessor;
 import com.pge.krakencis.routes.BaseRoute;
-import org.apache.camel.model.rest.RestParamType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+
+/**
+ * HTTP listener for inbound alarm events from Kraken CIS.
+ *
+ * <p>Exposes {@code POST /api/v1/alarms}. The body must be a valid
+ * {@link AlarmRequest} JSON document. Validated events are mapped to
+ * {@link com.pge.krakencis.models.KrakenEvent} objects and published to
+ * the configured Kafka alarm topic.
+ *
+ * <h3>Route ID</h3>
+ * {@code route-post-alarms}
+ */
 
 @Component
 public class AlarmHttpListner extends BaseRoute {
@@ -20,54 +34,28 @@ public class AlarmHttpListner extends BaseRoute {
     @Value("${kafka.topic.alarms}")
     private String alarmsTopic;
 
-    public AlarmHttpListner(AlarmEventProcessor    alarmEventProcessor,
-                      AlarmResponseProcessor alarmResponseProcessor) {
+    public AlarmHttpListner(CorrelationIdProcessor  correlationIdProcessor,
+                            RouteLoggingProcessor   routeLoggingProcessor,
+                            RouteExceptionProcessor exceptionProcessor,
+                            AlarmEventProcessor     alarmEventProcessor,
+                            AlarmResponseProcessor  alarmResponseProcessor) {
+        super(correlationIdProcessor, routeLoggingProcessor, exceptionProcessor);
         this.alarmEventProcessor    = alarmEventProcessor;
         this.alarmResponseProcessor = alarmResponseProcessor;
     }
 
     @Override
     public void configure() {
-
-        rest()
-            .post("/{version}/alarms")
-                .description("Versioned alarm submission endpoint")
-                .consumes("application/json")
-                .produces("application/json")
-                .param()
-                    .name("version").type(RestParamType.path)
-                    .description("API version identifier, e.g. v1, v2, v3")
-                    .required(true)
-                .endParam()
-                .param()
-                    .name("X-Correlation-ID").type(RestParamType.header)
-                    .description("Optional correlation ID for request tracing (passed from Kong)")
-                    .required(false)
-                .endParam()
-                .type(AlarmRequest.class)
-                .to("direct:process-alarms");
-
         rest()
             .post("/alarms")
-                .description("Alarm submission endpoint (current stable version)")
+                .description("Receive alarm events from Kraken CIS and publish to Kafka")
                 .consumes("application/json")
                 .produces("application/json")
-                .param()
-                    .name("X-Correlation-ID").type(RestParamType.header)
-                    .description("Optional correlation ID for request tracing (passed from Kong)")
-                    .required(false)
-                .endParam()
                 .type(AlarmRequest.class)
                 .to("direct:process-alarms");
 
         processingRoute("direct:process-alarms", "route-post-alarms", OPERATION, route ->
             route
-                .choice()
-                    .when(header("version").isNull())
-                        .setHeader("API-Version", constant("v2"))
-                    .otherwise()
-                        .setHeader("API-Version", header("version"))
-                .end()
                 .process(alarmEventProcessor)
                 .setProperty(LogConstants.KAFKA_TOPIC, constant(alarmsTopic))
                 .to("direct:publishToKafka")
