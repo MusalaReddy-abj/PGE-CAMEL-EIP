@@ -1,0 +1,360 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Kong Gateway — Declarative Configuration
+# Format: Kong 3.x DB-less (kong.yml)
+#
+# TOPOLOGY
+#
+#   Inbound  (Kraken CIS → Kong :8000 → Our App :9080)
+#   ────────────────────────────────────────────────────
+#   POST /api/v1/alarms          → kraken-cis-upstream (:9080)
+#   POST /api/v1/rcdc            → kraken-cis-upstream (:9080)
+#   POST /api/v1/rcdc/response   → kraken-cis-upstream (:9080)
+#
+#   Outbound (Our App → Kong :8000 → Downstream Services)
+#   ────────────────────────────────────────────────────
+#   POST /proxy/rcdc/command     → soa-rcdc-upstream  (:8082)
+#   POST /proxy/ws/RCDSwitchState→ soa-mdh-upstream   (:8083)
+#
+# For outbound proxying to work, update application.yml:
+#   external-services.services.rcdc.url:
+#       http://kong:8000/proxy/rcdc/command
+#   external-services.services.rcdc-mdm-notification.url:
+#       http://kong:8000/proxy/ws/RCDSwitchState
+# ─────────────────────────────────────────────────────────────────────────────
+_format_version: "3.0"
+_transform: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPSTREAMS  (load balancing + health checks for every target host)
+# ─────────────────────────────────────────────────────────────────────────────
+upstreams:
+
+  # Our Kraken CIS application
+  - name: kraken-cis-upstream
+    algorithm: round-robin
+    healthchecks:
+      active:
+        type: http
+        http_path: /actuator/health
+        healthy:
+          http_statuses: [200]
+          interval: 10
+          successes: 1
+        unhealthy:
+          http_statuses: [500, 503]
+          interval: 10
+          http_failures: 3
+    targets:
+      - target: localhost:9080
+        weight: 100
+
+  # SOA-RCDC downstream service
+  - name: soa-rcdc-upstream
+    algorithm: round-robin
+    healthchecks:
+      active:
+        type: tcp
+        healthy:
+          interval: 30
+          successes: 1
+        unhealthy:
+          interval: 30
+          tcp_failures: 3
+    targets:
+      - target: localhost:8082
+        weight: 100
+
+  # MDM SOAP notification service
+  - name: soa-mdm-upstream
+    algorithm: round-robin
+    healthchecks:
+      active:
+        type: tcp
+        healthy:
+          interval: 30
+          successes: 1
+        unhealthy:
+          interval: 30
+          tcp_failures: 3
+    targets:
+      - target: localhost:8083
+        weight: 100
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SERVICES + ROUTES
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # INBOUND — Alarm Events
+  # POST /api/v1/alarms (application/json)
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: kraken-cis-alarms
+    host: kraken-cis-upstream
+    protocol: http
+    connect_timeout: 10000
+    write_timeout: 30000
+    read_timeout: 30000
+    routes:
+      - name: route-inbound-alarms
+        paths:
+          - /api/v1/alarms
+        methods:
+          - POST
+          - OPTIONS
+        strip_path: false
+        preserve_host: false
+        protocols:
+          - http
+          - https
+    plugins:
+      # Ensure X-Correlation-ID is always present — generate one if missing
+      - name: correlation-id
+        config:
+          header_name: X-Correlation-ID
+          generator: uuid
+          echo_downstream: true
+
+      # Rate limit: prevent alarm floods from overwhelming Kafka
+      - name: rate-limiting
+        config:
+          minute: 500
+          hour: 10000
+          policy: local
+          limit_by: ip
+          error_code: 429
+          error_message: "Alarm rate limit exceeded. Retry after 1 minute."
+
+      # Reject payloads larger than 2 MB
+      - name: request-size-limiting
+        config:
+          allowed_payload_size: 2
+
+      # CORS for browser-based callers
+      - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - POST
+            - OPTIONS
+          headers:
+            - Content-Type
+            - Authorization
+            - X-Correlation-ID
+          exposed_headers:
+            - X-Correlation-ID
+          max_age: 3600
+          credentials: false
+
+      # Add security headers to every response
+      - name: response-transformer
+        config:
+          add:
+            headers:
+              - "X-Content-Type-Options:nosniff"
+              - "X-Frame-Options:DENY"
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # INBOUND — RCDC Command
+  # POST /api/v1/rcdc (application/xml)
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: kraken-cis-rcdc
+    host: kraken-cis-upstream
+    protocol: http
+    connect_timeout: 10000
+    write_timeout: 30000
+    read_timeout: 30000
+    routes:
+      - name: route-inbound-rcdc
+        paths:
+          - /api/v1/rcdc
+        methods:
+          - POST
+          - OPTIONS
+        strip_path: false
+        preserve_host: false
+        protocols:
+          - http
+          - https
+    plugins:
+      - name: correlation-id
+        config:
+          header_name: X-Correlation-ID
+          generator: uuid
+          echo_downstream: true
+
+      # RCDC commands are one-per-meter — 200/min is generous
+      - name: rate-limiting
+        config:
+          minute: 200
+          hour: 5000
+          policy: local
+          limit_by: ip
+          error_code: 429
+          error_message: "RCDC command rate limit exceeded."
+
+      # XML payloads should be small
+      - name: request-size-limiting
+        config:
+          allowed_payload_size: 1
+
+      - name: response-transformer
+        config:
+          add:
+            headers:
+              - "X-Content-Type-Options:nosniff"
+              - "X-Frame-Options:DENY"
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # INBOUND — RCDC HES Response Callback
+  # POST /api/v1/rcdc/response (application/json)
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: kraken-cis-rcdc-response
+    host: kraken-cis-upstream
+    protocol: http
+    connect_timeout: 10000
+    write_timeout: 30000
+    read_timeout: 30000
+    routes:
+      - name: route-inbound-rcdc-response
+        paths:
+          - /api/v1/rcdc/response
+        methods:
+          - POST
+          - OPTIONS
+        strip_path: false
+        preserve_host: false
+        protocols:
+          - http
+          - https
+    plugins:
+      - name: correlation-id
+        config:
+          header_name: X-Correlation-ID
+          generator: uuid
+          echo_downstream: true
+
+      - name: rate-limiting
+        config:
+          minute: 200
+          hour: 5000
+          policy: local
+          limit_by: ip
+          error_code: 429
+          error_message: "HES response rate limit exceeded."
+
+      - name: request-size-limiting
+        config:
+          allowed_payload_size: 1
+
+      - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - POST
+            - OPTIONS
+          headers:
+            - Content-Type
+            - Authorization
+            - X-Correlation-ID
+          exposed_headers:
+            - X-Correlation-ID
+          max_age: 3600
+
+      - name: response-transformer
+        config:
+          add:
+            headers:
+              - "X-Content-Type-Options:nosniff"
+              - "X-Frame-Options:DENY"
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # OUTBOUND PROXY — SOA-RCDC Service
+  # Our app calls:  http://kong:8000/proxy/rcdc/command
+  # Kong forwards:  http://localhost:8082/api/rcdc/command
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: soa-rcdc-service
+    host: soa-rcdc-upstream
+    protocol: http
+    connect_timeout: 10000
+    write_timeout: 30000   # matches application.yml rcdc.timeout
+    read_timeout: 30000
+    routes:
+      - name: route-outbound-rcdc-command
+        paths:
+          - /proxy/rcdc
+        methods:
+          - POST
+        strip_path: true          # strips /proxy/rcdc → forwards /command
+        preserve_host: false
+        protocols:
+          - http
+    plugins:
+      # Ensure correct Content-Type reaches SOA-RCDC
+      - name: request-transformer
+        config:
+          add:
+            headers:
+              - "Content-Type:application/json"
+          replace:
+            headers:
+              - "Content-Type:application/json"
+
+      # Propagate correlation ID downstream
+      - name: correlation-id
+        config:
+          header_name: X-Correlation-ID
+          generator: uuid
+          echo_downstream: false
+
+      # Protect SOA-RCDC from being flooded by our retry logic
+      - name: rate-limiting
+        config:
+          minute: 300
+          policy: local
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # OUTBOUND PROXY — MDM SOAP Notification Service
+  # Our app calls:  http://kong:8000/proxy/ws/RCDSwitchState
+  # Kong forwards:  http://localhost:8083/ws/RCDSwitchState
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: soa-mdm-service
+    host: soa-mdm-upstream
+    protocol: http
+    connect_timeout: 10000
+    write_timeout: 60000   # SOAP calls can take longer than REST
+    read_timeout: 60000    # MDM processing time; application.yml timeout: 30000
+    routes:
+      - name: route-outbound-mdm-notification
+        paths:
+          - /proxy/ws
+        methods:
+          - POST
+        strip_path: true          # strips /proxy/ws → forwards /RCDSwitchState
+        preserve_host: false
+        protocols:
+          - http
+    plugins:
+      # SOAP requires exact Content-Type and empty SOAPAction
+      - name: request-transformer
+        config:
+          add:
+            headers:
+              - "Content-Type:text/xml; charset=utf-8"
+              - "SOAPAction:\"\""
+          replace:
+            headers:
+              - "Content-Type:text/xml; charset=utf-8"
+
+      - name: correlation-id
+        config:
+          header_name: X-Correlation-ID
+          generator: uuid
+          echo_downstream: false
+
+      - name: rate-limiting
+        config:
+          minute: 200
+          policy: local

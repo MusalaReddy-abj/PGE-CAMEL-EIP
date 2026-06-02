@@ -4,7 +4,7 @@ spring:
   profiles:
     active: dev
   config:
-    import: optional:classpath:kafka.yml,optional:classpath:ftp.yml
+    import: optional:classpath:kafka.yml,optional:classpath:ftp.yml,optional:classpath:s3.yml
 
 # Spring Boot embedded server (Actuator management endpoints only)
 server:

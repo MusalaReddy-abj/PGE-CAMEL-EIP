@@ -13,3 +13,5 @@ logs/*.log
 config/prod/application-prod.yml
 src/main/resources/ssl/*.jks
 src/main/resources/ssl/*.p12
+# S3 credentials — never commit
+src/main/resources/s3.yml
