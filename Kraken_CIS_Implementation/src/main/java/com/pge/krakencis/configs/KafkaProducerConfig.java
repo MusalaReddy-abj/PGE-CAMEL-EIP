@@ -41,16 +41,26 @@ public class KafkaProducerConfig {
      * Used with Camel's .toD() for dynamic topic resolution at runtime:
      *   .toD("kafka:${exchangeProperty.kafkaTopic}?" + buildQueryString())
      */
+    // public String buildQueryString() {
+    //     return "brokers="          + brokers
+    //         + "&acks="             + acks
+    //         + "&retries="          + retries
+    //         + "&requestTimeoutMs=" + requestTimeoutMs
+    //         + "&lingerMs="         + lingerMs
+    //         + "&compressionCodec=" + compressionType
+    //         + "&keySerializer="    + keySerializer
+    //         + "&valueSerializer="  + valueSerializer;
+    // }
     public String buildQueryString() {
-        return "brokers="          + brokers
-            + "&acks="             + acks
-            + "&retries="          + retries
-            + "&requestTimeoutMs=" + requestTimeoutMs
-            + "&lingerMs="         + lingerMs
-            + "&compressionCodec=" + compressionType
-            + "&keySerializer="    + keySerializer
-            + "&valueSerializer="  + valueSerializer;
-    }
+    return "brokers=" + brokers
+        + "&additionalProperties[acks]=" + acks
+        + "&retries=" + retries
+        + "&requestTimeoutMs=" + requestTimeoutMs
+        + "&lingerMs=" + lingerMs
+        + "&compressionCodec=" + compressionType
+        + "&keySerializer=" + keySerializer
+        + "&valueSerializer=" + valueSerializer;
+}
 
     /**
      * Full URI for a known topic (used in non-dynamic routes).
