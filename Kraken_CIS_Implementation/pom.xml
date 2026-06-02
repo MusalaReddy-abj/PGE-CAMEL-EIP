@@ -127,6 +127,12 @@
             <artifactId>camel-ftp-starter</artifactId>
         </dependency>
 
+        <!-- Camel AWS S3 (Profile Reads S3 polling) -->
+        <dependency>
+            <groupId>org.apache.camel.springboot</groupId>
+            <artifactId>camel-aws2-s3-starter</artifactId>
+        </dependency>
+
         <!-- Camel Quartz (Scheduling) -->
         <dependency>
             <groupId>org.apache.camel.springboot</groupId>

@@ -80,6 +80,7 @@ public class ProfileReadsFTPListner extends BaseRoute {
             .process(profileReadsCsvProcessor)
             .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsTopic))
             .to("direct:publishToKafka")
+            .to("direct:publishProfileReadsDlq")   // publishes any partial-failure rows to DLQ
             .process(routeLoggingProcessor.exit(OPERATION));
     }
 
