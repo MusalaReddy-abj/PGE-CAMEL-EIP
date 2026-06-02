@@ -6,6 +6,7 @@ import com.pge.krakencis.exceptions.ValidationException;
 import com.pge.krakencis.logging.RouteLoggingProcessor;
 import com.pge.krakencis.processors.CorrelationIdProcessor;
 import com.pge.krakencis.processors.RouteExceptionProcessor;
+import org.apache.camel.LoggingLevel;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.model.RouteDefinition;
 
@@ -25,10 +26,10 @@ import java.util.function.Consumer;
  *   );
  *
  * Cross-cutting concerns handled automatically:
- *   ✓ ValidationException      → 400
- *   ✓ TransformationException  → 422
- *   ✓ KrakenBaseException      → 500
- *   ✓ Exception                → 500
+ *   ✓ ValidationException      → 400 immediately (no retry — payload fault)
+ *   ✓ TransformationException  → 422 immediately (no retry — payload fault)
+ *   ✓ KrakenBaseException      → 500 immediately
+ *   ✓ Exception                → retry 3× (1 s / 2 s / 4 s exp backoff) → 503 with retry details
  *   ✓ Correlation ID seed/propagation
  *   ✓ Route entry / exit audit logging
  */
@@ -60,8 +61,17 @@ public abstract class BaseRoute extends RouteBuilder {
         route.onException(KrakenBaseException.class)
             .handled(true).process(exceptionProcessor.domain(operation)).end();
 
+        // Transient failures (e.g. Kafka publish unavailable): retry 3 times with exponential
+        // backoff (1 s → 2 s → 4 s) then return 503 with retry-count details.
         route.onException(Exception.class)
-            .handled(true).process(exceptionProcessor.system(operation)).end();
+            .maximumRedeliveries(3)
+            .redeliveryDelay(1_000)
+            .backOffMultiplier(2)
+            .useExponentialBackOff()
+            .retryAttemptedLogLevel(LoggingLevel.WARN)
+            .handled(true)
+            .process(exceptionProcessor.systemWithRetryInfo(operation))
+            .end();
 
         route.process(correlationIdProcessor)
              .process(routeLoggingProcessor.entry(operation));
