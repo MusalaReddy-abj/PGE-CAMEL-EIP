@@ -52,11 +52,30 @@ public class SOAMDMNotificationService {
 
         HttpOutboundResponse response = httpClientService.send(request, correlationId);
 
+        int statusCode = response.getStatusCode();
+
+        // SOAP services can return HTTP 200 with a <soap:Fault> inside the body.
+        // Inspect the response body and override the status so retry/DLQ routing
+        // works the same as for plain HTTP errors.
+        if (statusCode == 200 && SoapFaultInspector.hasFault(response.getBody())) {
+            Integer inferredStatus = SoapFaultInspector.inferHttpStatus(response.getBody());
+            String  faultMessage   = SoapFaultInspector.extractFaultMessage(response.getBody());
+            boolean isClientFault  = SoapFaultInspector.isClientFault(response.getBody());
+
+            log.warn("soapFaultDetectedInHttpOkResponse", correlationId,
+                "service",       SERVICE_NAME,
+                "inferredStatus", inferredStatus,
+                "isClientFault",  isClientFault,
+                "faultMessage",   faultMessage);
+
+            statusCode = inferredStatus != null ? inferredStatus : 500;
+        }
+
         log.info("mdmNotificationSent", correlationId,
             "service",    SERVICE_NAME,
-            "httpStatus", response.getStatusCode(),
-            "success",    response.isSuccess());
+            "httpStatus", statusCode,
+            "success",    statusCode >= 200 && statusCode < 300);
 
-        return response.getStatusCode();
+        return statusCode;
     }
 }
