@@ -1,0 +1,834 @@
+openapi: 3.0.3
+
+info:
+  title: Kraken CIS Integration API
+  description: |
+    Integration layer between **Kraken CIS** (Customer Information System) and downstream utility systems
+    (HES, MDM, SOA-RCDC). Built on Apache Camel 4.6 / Spring Boot 3.2.
+
+    ## Flows
+
+    | Flow | Trigger | Async Path |
+    |------|---------|------------|
+    | Alarm Events | `POST /alarms` | → Kafka `kraken-alarm-events` |
+    | RCDC Command | `POST /rcdc` | → Kafka `kraken-rcdc-events` → SOA-RCDC HTTP |
+    | RCDC HES Response | `POST /rcdc/response` | → Kafka `kraken-rcdc-hes-response-events` → MDM SOAP |
+    | Profile Reads | FTP poll (CSV) | → Kafka `kraken-profile-reads-events` |
+
+    ## Error Handling
+
+    All endpoints share a common error structure. HTTP status codes map to exception types:
+
+    | Status | Cause | Retry? |
+    |--------|-------|--------|
+    | 400 | Validation failure (missing/invalid field) | No — payload fault |
+    | 422 | Transformation/mapping failure | No — payload fault |
+    | 503 | Transient failure (e.g. Kafka unavailable) — returned after **3 automatic retries** (1 s → 2 s → 4 s exponential backoff). Response includes `retriesAttempted` and `cause`. | Caller may retry |
+    | 500 | Unexpected internal error | No |
+
+    ## Retry & Dead-Letter Strategy (Kafka Consumer Routes)
+
+    Kafka consumer routes apply a **3-attempt retry** with exponential backoff before routing
+    failed messages to dedicated error topics. Callers of the HTTP endpoints never see this
+    internal Kafka retry — it is transparent.
+
+    | Error type | Behaviour | Destination topic |
+    |-----------|-----------|-------------------|
+    | Payload invalid (`ValidationException`, `TransformationException`) | Immediate — no retry | DLQ |
+    | Transient (`RetryableException`: 5xx, 408, 429, network error) | Retry × 3, then route | Retry queue |
+    | Permanent (`ExternalServiceException`: 4xx client error) | No retry | DLQ |
+
+    | Flow | Retry topic | DLQ topic |
+    |------|------------|-----------|
+    | RCDC Command → SOA-RCDC | `kraken-rcdc-retry-events` | `kraken-rcdc-dlq-events` |
+    | HES Response → MDM | `kraken-rcdc-hes-retry-events` | `kraken-rcdc-hes-dlq-events` |
+
+    Retry/DLQ messages are published as `OutboundRequestEvent` JSON objects containing
+    `correlationId`, original `body`, `attempt`, `httpStatus`, `errorType`, and `timestamp`.
+
+    ## Correlation IDs
+
+    Every request receives a `correlationId` (UUID) that propagates across Kafka and downstream calls.
+    Callers may supply `X-Correlation-ID` on the HES response endpoint to carry the ID from the original command.
+
+  version: 1.0.0
+  contact:
+    name: PGE Integration Team
+
+servers:
+  - url: http://localhost:9080/api/v1
+    description: Local / Dev
+
+tags:
+  - name: Alarms
+    description: Alarm event ingestion from Kraken CIS
+  - name: RCDC
+    description: Remote Connect / Disconnect Command flows (inbound command + HES response)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATHS
+# ─────────────────────────────────────────────────────────────────────────────
+paths:
+
+  # ── Alarm Events ────────────────────────────────────────────────────────────
+  /alarms:
+    post:
+      operationId: receiveAlarmEvents
+      summary: Submit alarm events from Kraken CIS
+      description: |
+        Accepts a batch of alarm events from Kraken CIS, validates them, and publishes each event
+        individually to the Kafka topic `kraken-alarm-events`.
+
+        **Camel Route:** `route-post-alarms`
+
+        **Processing steps:**
+        1. Validate `AlarmRequest` (header verb/noun required; payload must contain ≥1 event)
+        2. Process each `AlarmEvent` via `AlarmEventProcessor`
+        3. Publish individual events to Kafka (key = generated correlationId)
+        4. Return count of published events
+      tags:
+        - Alarms
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlarmRequest'
+            examples:
+              singleAlarm:
+                summary: Single alarm event
+                value:
+                  header:
+                    verb: POST
+                    noun: Alarm
+                  payload:
+                    events:
+                      - category: "POWER_OUTAGE"
+                        createdDateTime: "2024-06-01T10:30:00Z"
+                        description: "Meter power outage detected"
+                        deviceIdentifierNumber: "MTR-00123456"
+                        reason: "Voltage drop below threshold"
+                        value: "0V"
+              multipleAlarms:
+                summary: Multiple alarm events
+                value:
+                  header:
+                    verb: POST
+                    noun: Alarm
+                  payload:
+                    events:
+                      - category: "TAMPER_ALERT"
+                        createdDateTime: "2024-06-01T11:00:00Z"
+                        description: "Tamper detected on meter cover"
+                        deviceIdentifierNumber: "MTR-00789012"
+                        reason: "Magnetic tamper"
+                        value: "DETECTED"
+                      - category: "COMMUNICATION_FAILURE"
+                        createdDateTime: "2024-06-01T11:05:00Z"
+                        description: "Meter communication failure"
+                        deviceIdentifierNumber: "MTR-00345678"
+                        reason: "No heartbeat for 24h"
+                        value: "OFFLINE"
+      responses:
+        '200':
+          description: Alarm events accepted and published to Kafka
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlarmProcessingResponse'
+              example:
+                status: SUCCESS
+                correlationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                eventsPublished: 2
+                topic: kraken-alarm-events
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ── RCDC Command (Inbound) ───────────────────────────────────────────────────
+  /rcdc:
+    post:
+      operationId: receiveRcdcCommand
+      summary: Submit a Remote Connect/Disconnect Command
+      description: |
+        Accepts an XML-formatted RCDC command from Kraken CIS, validates the state value
+        (`CONNECT` or `DISCONNECT`), maps it to the downstream target format, and publishes
+        it to the Kafka topic `kraken-rcdc-events`.
+
+        A Kafka consumer (`route-rcdc-kafka-consumer`) then picks up the message and forwards
+        the enriched `RcdcTargetRequest` XML to the SOA-RCDC HTTP service.
+
+        **Camel Route:** `route-post-rcdc`
+
+        **XML Namespace:** `http://xmlns.oracle.com/ouaf/iec`
+
+        **Processing steps:**
+        1. Unmarshal XML → `RcdcRequest`
+        2. Validate state is `CONNECT` or `DISCONNECT`
+        3. Map to `RcdcTargetRequest` (adds `timestamp` and `source=KRAKEN-CIS`)
+        4. Publish to Kafka (key = correlationId)
+        5. Return `RcdcAcknowledgement` XML
+      tags:
+        - RCDC
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema:
+              $ref: '#/components/schemas/RcdcRequest'
+            examples:
+              connectCommand:
+                summary: Connect meter
+                value: |
+                  <?xml version="1.0" encoding="UTF-8"?>
+                  <requestMessage xmlns="http://xmlns.oracle.com/ouaf/iec">
+                    <header>
+                      <verb>Create</verb>
+                      <noun>RCDSwitchState</noun>
+                      <replyAddress>http://hes.pge.com/callback/rcdc</replyAddress>
+                      <correlationID>3fa85f64-5717-4562-b3fc-2c963f66afa6</correlationID>
+                    </header>
+                    <payLoad>
+                      <RCDSwitchState>
+                        <endDeviceAsset>
+                          <mRID>1.21.120.0.0.0.0.0.0.0.0.0.0.0.0.0.0.4097</mRID>
+                        </endDeviceAsset>
+                        <state>CONNECT</state>
+                      </RCDSwitchState>
+                    </payLoad>
+                  </requestMessage>
+              disconnectCommand:
+                summary: Disconnect meter
+                value: |
+                  <?xml version="1.0" encoding="UTF-8"?>
+                  <requestMessage xmlns="http://xmlns.oracle.com/ouaf/iec">
+                    <header>
+                      <verb>Create</verb>
+                      <noun>RCDSwitchState</noun>
+                      <replyAddress>http://hes.pge.com/callback/rcdc</replyAddress>
+                      <correlationID>7ab12c34-1234-5678-9abc-def012345678</correlationID>
+                    </header>
+                    <payLoad>
+                      <RCDSwitchState>
+                        <endDeviceAsset>
+                          <mRID>1.21.120.0.0.0.0.0.0.0.0.0.0.0.0.0.0.4097</mRID>
+                        </endDeviceAsset>
+                        <state>DISCONNECT</state>
+                      </RCDSwitchState>
+                    </payLoad>
+                  </requestMessage>
+      responses:
+        '200':
+          description: RCDC command accepted and queued to Kafka
+          content:
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/RcdcAcknowledgement'
+              examples:
+                success:
+                  summary: Successful acknowledgement
+                  value: |
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <responseDetail xmlns="http://xmlns.oracle.com/ouaf/iec">
+                      <instanceID>3fa85f64-5717-4562-b3fc-2c963f66afa6</instanceID>
+                      <reply>
+                        <replyCode>0</replyCode>
+                        <errorMessage></errorMessage>
+                      </reply>
+                    </responseDetail>
+                validationError:
+                  summary: Validation error acknowledgement
+                  value: |
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <responseDetail xmlns="http://xmlns.oracle.com/ouaf/iec">
+                      <instanceID>3fa85f64-5717-4562-b3fc-2c963f66afa6</instanceID>
+                      <reply>
+                        <replyCode>400</replyCode>
+                        <errorMessage>Invalid state value: must be CONNECT or DISCONNECT</errorMessage>
+                      </reply>
+                    </responseDetail>
+        '400':
+          $ref: '#/components/responses/BadRequestXml'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityXml'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableXml'
+        '500':
+          $ref: '#/components/responses/InternalServerErrorXml'
+
+  # ── RCDC HES Response (Inbound from HES) ────────────────────────────────────
+  /rcdc/response:
+    post:
+      operationId: receiveHesRcdcResponse
+      summary: Receive HES response for a previously issued RCDC command
+      description: |
+        Accepts the JSON response from the Head-End System (HES) after executing a
+        connect/disconnect command. Extracts the `CorrelationID` from the header,
+        and publishes the event to Kafka topic `kraken-rcdc-hes-response-events`.
+
+        A Kafka consumer (`route-rcdc-hes-kafka-consumer`) then forwards the message
+        to the MDM notification SOAP service.
+
+        **Camel Route:** `route-post-rcdc-hes-response`
+
+        **Processing steps:**
+        1. Validate `RcdcHesResponseMessage`
+        2. Extract `correlationID` from `Header.CorrelationID` (or fall back to `X-Correlation-ID` header)
+        3. Publish to Kafka (key = correlationId)
+        4. Return HTTP 202 Accepted
+      tags:
+        - RCDC
+      parameters:
+        - name: X-Correlation-ID
+          in: header
+          required: false
+          description: Correlation ID from the original RCDC command (fallback if not present in body)
+          schema:
+            type: string
+            format: uuid
+            example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RcdcHesResponseMessage'
+            examples:
+              successResponse:
+                summary: HES reports successful connect
+                value:
+                  Header:
+                    Verb: Reply
+                    Noun: RCDSwitchState
+                    Timestamp: "2024-06-01T10:35:00Z"
+                    CorrelationID: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                  Reply:
+                    ReplyCode: "0"
+                  Payload:
+                    DefaultResponse:
+                      EndDeviceAsset:
+                        mRID: "1.21.120.0.0.0.0.0.0.0.0.0.0.0.0.0.0.4097"
+              failureResponse:
+                summary: HES reports failure
+                value:
+                  Header:
+                    Verb: Reply
+                    Noun: RCDSwitchState
+                    Timestamp: "2024-06-01T10:35:30Z"
+                    CorrelationID: "7ab12c34-1234-5678-9abc-def012345678"
+                  Reply:
+                    ReplyCode: "500"
+                  Payload:
+                    DefaultResponse:
+                      EndDeviceAsset:
+                        mRID: "1.21.120.0.0.0.0.0.0.0.0.0.0.0.0.0.0.4097"
+      responses:
+        '202':
+          description: HES response accepted and queued for MDM notification
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ACCEPTED
+                  correlationId:
+                    type: string
+                    format: uuid
+                    example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPONENTS
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+
+  # ── Schemas ─────────────────────────────────────────────────────────────────
+  schemas:
+
+    # ── Alarm Request ──────────────────────────────────────────────────────────
+    AlarmRequest:
+      type: object
+      required:
+        - header
+        - payload
+      properties:
+        header:
+          $ref: '#/components/schemas/AlarmHeader'
+        payload:
+          $ref: '#/components/schemas/AlarmPayload'
+
+    AlarmHeader:
+      type: object
+      required:
+        - verb
+        - noun
+      properties:
+        verb:
+          type: string
+          description: CIM verb for this message
+          example: POST
+        noun:
+          type: string
+          description: CIM noun identifying the entity type
+          example: Alarm
+
+    AlarmPayload:
+      type: object
+      required:
+        - events
+      properties:
+        events:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/AlarmEvent'
+
+    AlarmEvent:
+      type: object
+      properties:
+        category:
+          type: string
+          description: Alarm category code
+          example: POWER_OUTAGE
+        createdDateTime:
+          type: string
+          format: date-time
+          description: ISO-8601 timestamp when alarm was created
+          example: "2024-06-01T10:30:00Z"
+        description:
+          type: string
+          description: Human-readable alarm description
+          example: "Meter power outage detected"
+        deviceIdentifierNumber:
+          type: string
+          description: Unique identifier of the device generating the alarm
+          example: "MTR-00123456"
+        reason:
+          type: string
+          description: Reason code or description for the alarm
+          example: "Voltage drop below threshold"
+        value:
+          type: string
+          description: Measured or observed value associated with the alarm
+          example: "0V"
+
+    AlarmProcessingResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Processing status
+          enum:
+            - SUCCESS
+            - FAILED
+          example: SUCCESS
+        correlationId:
+          type: string
+          format: uuid
+          description: Correlation ID assigned to this batch
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        eventsPublished:
+          type: integer
+          description: Number of alarm events successfully published to Kafka
+          example: 2
+        topic:
+          type: string
+          description: Kafka topic the events were published to
+          example: kraken-alarm-events
+
+    # ── RCDC Request (XML) ─────────────────────────────────────────────────────
+    RcdcRequest:
+      type: object
+      xml:
+        name: requestMessage
+        namespace: "http://xmlns.oracle.com/ouaf/iec"
+      required:
+        - header
+        - payload
+      properties:
+        header:
+          $ref: '#/components/schemas/RcdcHeader'
+        payload:
+          $ref: '#/components/schemas/RcdcPayload'
+
+    RcdcHeader:
+      type: object
+      xml:
+        namespace: "http://xmlns.oracle.com/ouaf/iec"
+      required:
+        - verb
+        - noun
+      properties:
+        verb:
+          type: string
+          xml:
+            name: verb
+            namespace: "http://xmlns.oracle.com/ouaf/iec"
+          description: CIM verb (e.g. Create, Update)
+          example: Create
+        noun:
+          type: string
+          xml:
+            name: noun
+            namespace: "http://xmlns.oracle.com/ouaf/iec"
+          description: CIM noun (always RCDSwitchState for RCDC)
+          example: RCDSwitchState
+        replyAddress:
+          type: string
+          xml:
+            name: replyAddress
+            namespace: "http://xmlns.oracle.com/ouaf/iec"
+          description: Callback URL for the HES to send the result
+          example: "http://hes.pge.com/callback/rcdc"
+        correlationID:
+          type: string
+          xml:
+            name: correlationID
+            namespace: "http://xmlns.oracle.com/ouaf/iec"
+          description: Caller-supplied correlation ID propagated through all hops
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+
+    RcdcPayload:
+      type: object
+      xml:
+        namespace: "http://xmlns.oracle.com/ouaf/iec"
+      required:
+        - rcdSwitchState
+      properties:
+        rcdSwitchState:
+          xml:
+            name: RCDSwitchState
+            namespace: "http://xmlns.oracle.com/ouaf/iec"
+          $ref: '#/components/schemas/RcdcSwitchState'
+
+    RcdcSwitchState:
+      type: object
+      xml:
+        namespace: "http://xmlns.oracle.com/ouaf/iec"
+      required:
+        - endDeviceAsset
+        - state
+      properties:
+        endDeviceAsset:
+          xml:
+            name: endDeviceAsset
+            namespace: "http://xmlns.oracle.com/ouaf/iec"
+          $ref: '#/components/schemas/RcdcEndDeviceAsset'
+        state:
+          type: string
+          xml:
+            name: state
+            namespace: "http://xmlns.oracle.com/ouaf/iec"
+          description: Desired switch state — must be exactly CONNECT or DISCONNECT (case-insensitive input, normalised to uppercase)
+          enum:
+            - CONNECT
+            - DISCONNECT
+          example: CONNECT
+
+    RcdcEndDeviceAsset:
+      type: object
+      xml:
+        namespace: "http://xmlns.oracle.com/ouaf/iec"
+      required:
+        - mRID
+      properties:
+        mRID:
+          type: string
+          xml:
+            name: mRID
+            namespace: "http://xmlns.oracle.com/ouaf/iec"
+          description: Master Resource ID of the end device (meter)
+          example: "1.21.120.0.0.0.0.0.0.0.0.0.0.0.0.0.0.4097"
+
+    RcdcAcknowledgement:
+      type: object
+      xml:
+        name: responseDetail
+        namespace: "http://xmlns.oracle.com/ouaf/iec"
+      properties:
+        instanceID:
+          type: string
+          xml:
+            name: instanceID
+          description: Correlation ID echoed back from the accepted request
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        reply:
+          $ref: '#/components/schemas/RcdcReply'
+
+    RcdcReply:
+      type: object
+      xml:
+        name: reply
+      properties:
+        replyCode:
+          type: string
+          xml:
+            name: replyCode
+          description: "0 = success; any other value = error"
+          example: "0"
+        errorMessage:
+          type: string
+          xml:
+            name: errorMessage
+          description: Human-readable error message (empty on success)
+          example: ""
+
+    # ── RCDC HES Response ──────────────────────────────────────────────────────
+    RcdcHesResponseMessage:
+      type: object
+      required:
+        - Header
+        - Reply
+        - Payload
+      properties:
+        Header:
+          $ref: '#/components/schemas/RcdcHesResponseHeader'
+        Reply:
+          $ref: '#/components/schemas/RcdcHesReply'
+        Payload:
+          $ref: '#/components/schemas/RcdcHesPayload'
+
+    RcdcHesResponseHeader:
+      type: object
+      required:
+        - Verb
+        - Noun
+        - Timestamp
+        - CorrelationID
+      properties:
+        Verb:
+          type: string
+          description: CIM verb from HES
+          example: Reply
+        Noun:
+          type: string
+          description: CIM noun from HES
+          example: RCDSwitchState
+        Timestamp:
+          type: string
+          format: date-time
+          description: ISO-8601 timestamp of HES response
+          example: "2024-06-01T10:35:00Z"
+        CorrelationID:
+          type: string
+          description: Correlation ID from the original RCDC command
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+
+    RcdcHesReply:
+      type: object
+      required:
+        - ReplyCode
+      properties:
+        ReplyCode:
+          type: string
+          description: "0 = success; non-zero = failure"
+          example: "0"
+
+    RcdcHesPayload:
+      type: object
+      required:
+        - DefaultResponse
+      properties:
+        DefaultResponse:
+          $ref: '#/components/schemas/RcdcHesDefaultResponse'
+
+    RcdcHesDefaultResponse:
+      type: object
+      required:
+        - EndDeviceAsset
+      properties:
+        EndDeviceAsset:
+          $ref: '#/components/schemas/RcdcHesEndDeviceAsset'
+
+    RcdcHesEndDeviceAsset:
+      type: object
+      required:
+        - mRID
+      properties:
+        mRID:
+          type: string
+          description: Master Resource ID of the device that was switched
+          example: "1.21.120.0.0.0.0.0.0.0.0.0.0.0.0.0.0.4097"
+
+    # ── Shared Error Schema ────────────────────────────────────────────────────
+    ServiceUnavailableResponse:
+      type: object
+      properties:
+        errorCode:
+          type: string
+          example: SYS-001
+        message:
+          type: string
+          description: Human-readable message including retry count
+          example: "Service temporarily unavailable after 3 retry attempt(s)"
+        detail:
+          type: object
+          properties:
+            retriesAttempted:
+              type: integer
+              description: Number of automatic retries performed before giving up
+              example: 3
+            cause:
+              type: string
+              description: Root-cause message from the final failed attempt
+              example: "Connection refused: kafka:9092"
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: integer
+          description: HTTP status code
+          example: 400
+        error:
+          type: string
+          description: Short error type
+          example: Bad Request
+        message:
+          type: string
+          description: Human-readable error detail
+          example: "Missing required field: payload.events"
+        correlationId:
+          type: string
+          format: uuid
+          description: Correlation ID of the failed request
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-06-01T10:30:00Z"
+
+    ErrorResponseXml:
+      type: object
+      xml:
+        name: errorResponse
+      properties:
+        status:
+          type: integer
+          xml:
+            name: status
+          example: 400
+        error:
+          type: string
+          xml:
+            name: error
+          example: Bad Request
+        message:
+          type: string
+          xml:
+            name: message
+          example: "Invalid state value: must be CONNECT or DISCONNECT"
+        correlationId:
+          type: string
+          xml:
+            name: correlationId
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        timestamp:
+          type: string
+          xml:
+            name: timestamp
+          format: date-time
+          example: "2024-06-01T10:30:00Z"
+
+  # ── Responses ────────────────────────────────────────────────────────────────
+  responses:
+
+    BadRequest:
+      description: Validation failure — missing or invalid field
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 400
+            error: Bad Request
+            message: "Missing required field: payload.events"
+            correlationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+            timestamp: "2024-06-01T10:30:00Z"
+
+    BadRequestXml:
+      description: Validation failure — missing or invalid XML field
+      content:
+        application/xml:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseXml'
+
+    UnprocessableEntity:
+      description: Transformation failure — payload could not be mapped
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 422
+            error: Unprocessable Entity
+            message: "Transformation failed: unable to map RcdcRequest to target format"
+            correlationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+            timestamp: "2024-06-01T10:30:00Z"
+
+    UnprocessableEntityXml:
+      description: Transformation failure — XML payload could not be mapped
+      content:
+        application/xml:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseXml'
+
+    ServiceUnavailable:
+      description: |
+        Transient failure — returned after **3 automatic retries** with exponential backoff
+        (1 s → 2 s → 4 s). The `detail.retriesAttempted` field shows how many were performed.
+        Callers may retry the request after a short delay.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ServiceUnavailableResponse'
+          example:
+            errorCode: SYS-001
+            message: "Service temporarily unavailable after 3 retry attempt(s)"
+            detail:
+              retriesAttempted: 3
+              cause: "Connection refused: kafka:9092"
+
+    ServiceUnavailableXml:
+      description: Transient failure after 3 retries (XML endpoint)
+      content:
+        application/xml:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseXml'
+
+    InternalServerError:
+      description: Unexpected internal error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 500
+            error: Internal Server Error
+            message: "An unexpected error occurred"
+            correlationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+            timestamp: "2024-06-01T10:30:00Z"
+
+    InternalServerErrorXml:
+      description: Unexpected internal error (XML)
+      content:
+        application/xml:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseXml'
+
+  # ── Security (placeholder — add auth scheme when implemented) ────────────────
+  securitySchemes: {}
