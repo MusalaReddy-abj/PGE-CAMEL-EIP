@@ -9,6 +9,8 @@ import com.pge.krakencis.models.profilereads.ProfileReadFailedRow;
 import com.pge.krakencis.models.profilereads.ProfileReadPayload;
 import com.pge.krakencis.processors.BaseProcessor;
 import org.apache.camel.Exchange;
+import org.apache.camel.ProducerTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
@@ -22,37 +24,64 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Parses an FTP- or S3-delivered CSV file and produces:
+ * Parses an FTP- or S3-delivered CSV file and publishes rows to Kafka in
+ * configurable batches — bounding heap usage regardless of file size.
  *
+ * <h3>Large-file strategy</h3>
+ * <ol>
+ *   <li><b>File-size guard</b> — reads the file-size header set by the FTP/S3
+ *       consumer ({@code CamelFileSize} / {@code CamelAwsS3ContentLength}) and
+ *       throws a {@link ValidationException} if it exceeds {@code kafkaBatchSize}
+ *       MB. The file is moved to the error directory before any parsing begins.</li>
+ *   <li><b>Streaming line-by-line parse</b> — the file is never fully materialised
+ *       in heap; each line is read via a {@link BufferedReader} on the raw
+ *       {@link InputStream}.</li>
+ *   <li><b>Bounded batch publishing</b> — every {@code kafkaBatchSize} successfully
+ *       parsed rows, the current batch is converted to {@link KafkaProfileReadPayload}
+ *       objects and published to Kafka immediately via {@link ProducerTemplate}.
+ *       The current batch list is then cleared. At any moment heap holds at most
+ *       {@code kafkaBatchSize} rows.</li>
+ *   <li><b>Per-row error isolation</b> — bad rows are collected into
+ *       {@link LogConstants#PROP_FAILED_ROWS} for DLQ publishing without aborting
+ *       the file.</li>
+ * </ol>
+ *
+ * <h3>Exchange contract</h3>
  * <ul>
- *   <li><b>Exchange body</b> — {@code List<KafkaProfileReadPayload>} of successfully
- *       parsed rows, grouped by mRID + ReadingType, ready for Kafka publishing.</li>
- *   <li><b>Exchange property {@link LogConstants#PROP_FAILED_ROWS}</b> —
- *       {@code List<ProfileReadFailedRow>} of rows that failed to parse or validate.
- *       Always set (empty list when all rows succeed). The calling route publishes
- *       these to the profile-reads DLQ topic via
- *       {@code direct:publishProfileReadsDlq}.</li>
+ *   <li><b>Body out</b> — {@code List<KafkaProfileReadPayload>} of the final
+ *       (possibly partial) batch; published by the calling route.</li>
+ *   <li><b>{@link LogConstants#PROP_FAILED_ROWS}</b> — always set (empty list when all rows OK).</li>
+ *   <li><b>{@code profileReads.batchesPublished}</b> — total intermediate batches published.</li>
  * </ul>
- *
- * <h3>Outcome summary</h3>
- * <table border="1">
- *   <tr><th>Condition</th><th>Body</th><th>PROP_FAILED_ROWS</th><th>Exception thrown</th></tr>
- *   <tr><td>All rows OK</td><td>All payloads</td><td>empty list</td><td>—</td></tr>
- *   <tr><td>Some rows fail</td><td>Good payloads</td><td>failed rows → DLQ</td><td>—</td></tr>
- *   <tr><td>All rows fail</td><td>—</td><td>—</td><td>ValidationException → error dir</td></tr>
- *   <tr><td>Header missing/corrupt</td><td>—</td><td>—</td><td>ValidationException → error dir</td></tr>
- * </table>
  */
 @Component
 public class ProfileReadsCsvProcessor extends BaseProcessor {
 
-    private static final StructuredLogger   log       = StructuredLogger.of(ProfileReadsCsvProcessor.class);
-    private static final DateTimeFormatter  TIMESTAMP = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
+    private static final StructuredLogger  log       = StructuredLogger.of(ProfileReadsCsvProcessor.class);
+    private static final DateTimeFormatter TIMESTAMP = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
+
+    // Camel header names for file-size check (FTP and S3 consumers respectively)
+    private static final String HDR_FTP_SIZE = "CamelFileSize";
+    private static final String HDR_S3_SIZE  = "CamelAwsS3ContentLength";
 
     private final ProfileReadsMapper profileReadsMapper;
+    private final ProducerTemplate   producerTemplate;
 
-    public ProfileReadsCsvProcessor(ProfileReadsMapper profileReadsMapper) {
+    @Value("${kafka.topic.profile-reads:kraken-profile-reads-events}")
+    private String profileReadsTopic;
+
+    /** Rows per Kafka batch — injected from ftp/s3 profile-reads config or default 500. */
+    @Value("${profile-reads.kafka-batch-size:500}")
+    private int kafkaBatchSize;
+
+    /** Max file size in MB — injected from ftp/s3 profile-reads config or default 100. */
+    @Value("${profile-reads.max-file-size-mb:100}")
+    private int maxFileSizeMb;
+
+    public ProfileReadsCsvProcessor(ProfileReadsMapper profileReadsMapper,
+                                     ProducerTemplate   producerTemplate) {
         this.profileReadsMapper = profileReadsMapper;
+        this.producerTemplate   = producerTemplate;
     }
 
     @Override
@@ -60,28 +89,31 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
         String correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
         String fileName      = exchange.getIn().getHeader(Exchange.FILE_NAME, String.class);
 
+        // ── Step 1: file-size guard ───────────────────────────────────────────
+        rejectIfOversized(exchange, correlationId);
+
         InputStream inputStream = exchange.getIn().getBody(InputStream.class);
         if (inputStream == null) {
             throw ValidationException.missingField("CSV body", correlationId);
         }
 
-        List<ProfileReadPayload>  rawRows    = new ArrayList<>();
-        List<ProfileReadFailedRow> failedRows = new ArrayList<>();
-        int dataRowsSeen = 0;
+        List<ProfileReadPayload>   currentBatch = new ArrayList<>(kafkaBatchSize);
+        List<ProfileReadFailedRow> failedRows   = new ArrayList<>();
+        int dataRowsSeen       = 0;
+        int intermediateBatches = 0;
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
 
-            // ── Header ────────────────────────────────────────────────────────
+            // ── Step 2: header row ────────────────────────────────────────────
             String headerLine = reader.readLine();
             if (headerLine == null || headerLine.isBlank()) {
                 throw ValidationException.missingField("CSV header", correlationId);
             }
-
             Map<String, Integer> headerIndex = profileReadsMapper.buildHeaderIndex(headerLine);
             profileReadsMapper.validateHeaders(headerIndex, correlationId);
 
-            // ── Data rows — per-row isolation ─────────────────────────────────
+            // ── Step 3: stream + batch-publish ────────────────────────────────
             String line;
             int lineNumber = 1;
             while ((line = reader.readLine()) != null) {
@@ -91,9 +123,8 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
 
                 dataRowsSeen++;
                 try {
-                    rawRows.add(profileReadsMapper.parseRow(trimmed, headerIndex, correlationId));
+                    currentBatch.add(profileReadsMapper.parseRow(trimmed, headerIndex, correlationId));
                 } catch (Exception e) {
-                    // Row failed — collect for DLQ, do not fail the whole file
                     failedRows.add(ProfileReadFailedRow.builder()
                         .fileName(fileName)
                         .lineNumber(lineNumber)
@@ -103,42 +134,79 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
                         .correlationId(correlationId)
                         .timestamp(OffsetDateTime.now().format(TIMESTAMP))
                         .build());
-
                     log.warn("profileReadRowSkipped", correlationId,
-                        "fileName",   fileName,
-                        "lineNumber", lineNumber,
-                        "errorType",  e.getClass().getSimpleName(),
-                        "error",      e.getMessage());
+                        "fileName", fileName, "lineNumber", lineNumber,
+                        "errorType", e.getClass().getSimpleName(), "error", e.getMessage());
+                }
+
+                // Publish this batch and free memory
+                if (currentBatch.size() >= kafkaBatchSize) {
+                    publishBatch(currentBatch, correlationId);
+                    intermediateBatches++;
+                    log.debug("profileReadsBatchPublished", correlationId,
+                        "batchNumber", intermediateBatches, "batchSize", currentBatch.size());
+                    currentBatch.clear();
                 }
             }
         }
 
-        // ── Fail the whole file only when every row is bad ────────────────────
-        if (dataRowsSeen > 0 && rawRows.isEmpty()) {
+        if (dataRowsSeen > 0 && currentBatch.isEmpty() && intermediateBatches == 0) {
             throw ValidationException.missingField(
                 "parseable CSV rows (all " + dataRowsSeen + " rows failed)", correlationId);
         }
 
         if (!failedRows.isEmpty()) {
             log.warn("profileReadsCsvPartialFailure", correlationId,
-                "fileName",    fileName,
-                "successful",  rawRows.size(),
-                "failed",      failedRows.size());
+                "fileName", fileName, "failed", failedRows.size());
         }
 
-        // ── Group successful rows → Kafka messages ────────────────────────────
-        List<KafkaProfileReadPayload> kafkaMessages =
-            profileReadsMapper.toKafkaMessages(rawRows, correlationId);
+        // ── Step 4: convert remaining rows → final Kafka batch ────────────────
+        List<KafkaProfileReadPayload> finalBatch =
+            profileReadsMapper.toKafkaMessages(currentBatch, correlationId);
 
         log.info("profileReadsCsvProcessed", correlationId,
-            "fileName",      fileName,
-            "csvRows",       rawRows.size(),
-            "kafkaMessages", kafkaMessages.size(),
-            "failedRows",    failedRows.size());
+            "fileName",           fileName,
+            "dataRows",           dataRowsSeen,
+            "intermediateBatches", intermediateBatches,
+            "finalBatch",         finalBatch.size(),
+            "failedRows",         failedRows.size());
 
-        // Exchange body  = successful payloads → published to main topic
-        // Exchange prop  = failed rows → published to DLQ by the calling route
-        exchange.getIn().setBody(kafkaMessages);
+        // Final batch goes to the route's to("direct:publishToKafka")
+        exchange.getIn().setBody(finalBatch);
         exchange.setProperty(LogConstants.PROP_FAILED_ROWS, failedRows);
+        exchange.setProperty("profileReads.batchesPublished", intermediateBatches);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private void rejectIfOversized(Exchange exchange, String correlationId) {
+        long maxBytes = (long) maxFileSizeMb * 1024L * 1024L;
+
+        Long ftpSize = exchange.getIn().getHeader(HDR_FTP_SIZE, Long.class);
+        if (ftpSize != null && ftpSize > maxBytes) {
+            throw ValidationException.invalidFormat("file size",
+                "must be ≤ " + maxFileSizeMb + " MB (got " + (ftpSize / 1024 / 1024) + " MB)",
+                correlationId);
+        }
+
+        Long s3Size = exchange.getIn().getHeader(HDR_S3_SIZE, Long.class);
+        if (s3Size != null && s3Size > maxBytes) {
+            throw ValidationException.invalidFormat("file size",
+                "must be ≤ " + maxFileSizeMb + " MB (got " + (s3Size / 1024 / 1024) + " MB)",
+                correlationId);
+        }
+    }
+
+    private void publishBatch(List<ProfileReadPayload> batch, String correlationId) {
+        List<KafkaProfileReadPayload> kafkaMessages =
+            profileReadsMapper.toKafkaMessages(batch, correlationId);
+
+        if (kafkaMessages.isEmpty()) return;
+
+        producerTemplate.send("direct:publishToKafka", ex -> {
+            ex.setProperty(LogConstants.KAFKA_TOPIC, profileReadsTopic);
+            ex.setProperty(LogConstants.KAFKA_KEY,   correlationId);
+            ex.getIn().setBody(kafkaMessages);
+        });
     }
 }

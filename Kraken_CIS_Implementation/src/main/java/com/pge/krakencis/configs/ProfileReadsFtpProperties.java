@@ -36,6 +36,19 @@ public class ProfileReadsFtpProperties {
     /** Idempotent file-name repository to prevent duplicate processing on re-upload. */
     private boolean            idempotent          = true;
 
+    /**
+     * Maximum allowed file size in megabytes. Files exceeding this are rejected
+     * before parsing starts — prevents OOM from unexpectedly large uploads.
+     */
+    private int                maxFileSizeMb       = 100;
+
+    /**
+     * Number of parsed CSV rows published to Kafka per batch.
+     * Bounds memory usage to {@code kafkaBatchSize × sizeof(KafkaProfileReadPayload)}
+     * regardless of how many rows the file contains.
+     */
+    private int                kafkaBatchSize      = 500;
+
     public String buildUri() {
         return connection.buildBaseUri() + normalizeDirectory(remoteDirectory)
             + "?username=" + connection.getUsername()

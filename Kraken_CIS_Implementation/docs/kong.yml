@@ -315,6 +315,12 @@ services:
           minute: 300
           policy: local
 
+      # Cap outbound RCDC payload size — RCDC commands are small XML, reject anything
+      # unexpectedly large before it reaches the downstream service
+      - name: request-size-limiting
+        config:
+          allowed_payload_size: 1   # 1 MB
+
   # ══════════════════════════════════════════════════════════════════════════
   # OUTBOUND PROXY — MDM SOAP Notification Service
   # Our app calls:  http://kong:8000/proxy/ws/RCDSwitchState
@@ -358,3 +364,9 @@ services:
         config:
           minute: 200
           policy: local
+
+      # Cap outbound SOAP payload size — MDM SOAP envelopes are small;
+      # large payloads indicate a mapping error before they reach the SOAP service
+      - name: request-size-limiting
+        config:
+          allowed_payload_size: 1   # 1 MB

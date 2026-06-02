@@ -35,6 +35,12 @@ public class KafkaProducerConfig {
         "org.apache.kafka.common.serialization.StringSerializer";
     private String valueSerializer =
         "org.apache.kafka.common.serialization.StringSerializer";
+    /**
+     * Max in-flight requests per connection. Must be ≤ 5 when {@code acks=all}
+     * and {@code retries > 0} to guarantee ordering and prevent duplicates under
+     * high-throughput retry scenarios.
+     */
+    private int    maxInFlightRequest = 5;
 
     /**
      * Query-string-only parameters (no topic prefix).
@@ -42,14 +48,15 @@ public class KafkaProducerConfig {
      *   .toD("kafka:${exchangeProperty.kafkaTopic}?" + buildQueryString())
      */
     public String buildQueryString() {
-        return "brokers="          + brokers
-            + "&acks="             + acks
-            + "&retries="          + retries
-            + "&requestTimeoutMs=" + requestTimeoutMs
-            + "&lingerMs="         + lingerMs
-            + "&compressionCodec=" + compressionType
-            + "&keySerializer="    + keySerializer
-            + "&valueSerializer="  + valueSerializer;
+        return "brokers="                  + brokers
+            + "&acks="                     + acks
+            + "&retries="                  + retries
+            + "&requestTimeoutMs="         + requestTimeoutMs
+            + "&lingerMs="                 + lingerMs
+            + "&compressionCodec="         + compressionType
+            + "&keySerializer="            + keySerializer
+            + "&valueSerializer="          + valueSerializer
+            + "&maxInFlightRequest="       + maxInFlightRequest;
     }
 
     /**

@@ -52,11 +52,19 @@ public class HttpClientService {
     private final HttpClientProperties httpClientProperties;
     private final DlqPublisher         dlqPublisher;
 
-    public HttpClientService(HttpClientProperties httpClientProperties,
-                              DlqPublisher         dlqPublisher) {
+    /**
+     * @param restClientBuilder Spring Boot auto-configures this with:
+     *   - {@code ObservationRestClientCustomizer} → injects Micrometer Tracing observations
+     *     so every outbound call gets a child span and propagates {@code traceparent} /
+     *     {@code b3} headers to downstream services automatically.
+     *   - {@code MicrometerHttpClientObservationConvention} → records HTTP client metrics.
+     */
+    public HttpClientService(RestClient.Builder    restClientBuilder,
+                              HttpClientProperties  httpClientProperties,
+                              DlqPublisher          dlqPublisher) {
         this.httpClientProperties = httpClientProperties;
         this.dlqPublisher         = dlqPublisher;
-        this.restClient           = RestClient.builder().build();
+        this.restClient           = restClientBuilder.build();
     }
 
     /**

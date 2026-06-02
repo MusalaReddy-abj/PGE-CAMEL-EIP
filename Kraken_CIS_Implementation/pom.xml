@@ -145,6 +145,34 @@
             <artifactId>camel-micrometer-starter</artifactId>
         </dependency>
 
+        <!-- Prometheus Micrometer Registry — exposes /actuator/prometheus scrape endpoint -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- Distributed tracing: OpenTelemetry bridge for Micrometer Tracing.
+             Injects traceId/spanId into MDC automatically so every log line is
+             traceable across services. Also instruments RestClient outbound calls
+             to propagate W3C traceparent headers. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+
+        <!-- To export traces to Zipkin (add when Zipkin is available):
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-reporter-wavefront</artifactId>
+        </dependency>
+        OR for OTLP (Jaeger / Grafana Tempo):
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+        + management.otlp.tracing.endpoint=http://otel-collector:4318/v1/traces
+        -->
+
         <!-- Logstash JSON encoder -->
         <dependency>
             <groupId>net.logstash.logback</groupId>
