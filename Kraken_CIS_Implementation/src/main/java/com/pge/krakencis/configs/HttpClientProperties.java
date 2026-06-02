@@ -52,10 +52,15 @@ public class HttpClientProperties {
         private long   maxDelayMs           = 30_000;
 
         /**
-         * HTTP status codes that are eligible for retry.
-         * 4xx codes (except 429) are intentionally absent — client errors
-         * will not succeed on retry.
+         * HTTP status codes eligible for retry.
+         *
+         * <ul>
+         *   <li>404 — service endpoint temporarily unavailable (deployment / routing issue)</li>
+         *   <li>408 — request timeout</li>
+         *   <li>429 — rate limited; back off and retry</li>
+         *   <li>500/502/503/504 — server-side transient errors</li>
+         * </ul>
          */
-        private List<Integer> retryableStatusCodes = List.of(429, 500, 502, 503, 504);
+        private List<Integer> retryableStatusCodes = List.of(404, 408, 429, 500, 502, 503, 504);
     }
 }
