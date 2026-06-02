@@ -7,57 +7,51 @@ import com.pge.krakencis.models.profilereads.ProfileReadPayload;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Scanner;
-import java.util.stream.Collectors;
 
+/**
+ * Maps a Profile Reads CSV file into {@link ProfileReadPayload} objects.
+ *
+ * <h3>Expected CSV format</h3>
+ * <pre>
+ * Verb,Noun,mRID,ReadingType,timeStamp,value
+ * CREATED,MeterReadings,AW8003090,0.0.0.4.1.1.12.0.0.0.0.0.0.0.0.3.72.0,2025-12-18T00:30:00+05:30,0.0
+ * </pre>
+ *
+ * <ul>
+ *   <li>The first row is always the header — it is skipped by the processor.</li>
+ *   <li>Each subsequent row represents one meter reading interval.</li>
+ *   <li>Column lookup is by name (case-insensitive) so column order changes are tolerated.</li>
+ * </ul>
+ */
 @Component
 public class ProfileReadsMapper {
 
     private static final StructuredLogger log = StructuredLogger.of(ProfileReadsMapper.class);
+
+    // Exact header names as they appear in the CSV (stored in lower-case for lookup)
+    private static final String COL_VERB        = "verb";
+    private static final String COL_NOUN        = "noun";
+    private static final String COL_MRID        = "mrid";
+    private static final String COL_READING_TYPE = "readingtype";
+    private static final String COL_TIMESTAMP   = "timestamp";
+    private static final String COL_VALUE       = "value";
+
     private static final String[] REQUIRED_HEADERS = {
-        "externalid", "sourcehes", "profilename", "registers", "readings"
+        COL_VERB, COL_NOUN, COL_MRID, COL_READING_TYPE, COL_TIMESTAMP, COL_VALUE
     };
 
-    public List<ProfileReadPayload> toPayloads(String csvBody, String correlationId) {
-        if (csvBody == null || csvBody.trim().isEmpty()) {
-            throw ValidationException.missingField("FTP CSV body", correlationId);
-        }
+    // ── Public API used by ProfileReadsCsvProcessor ───────────────────────────
 
-        List<ProfileReadPayload> payloads = new ArrayList<>();
-        int rowCount = 0;
-
-        try (Scanner scanner = new Scanner(csvBody)) {
-            if (!scanner.hasNextLine()) {
-                throw ValidationException.missingField("FTP CSV header", correlationId);
-            }
-
-            String headerLine = scanner.nextLine().trim();
-            Map<String, Integer> headerIndex = buildHeaderIndex(headerLine);
-            validateHeaders(headerIndex, correlationId);
-
-            while (scanner.hasNextLine()) {
-                String line = scanner.nextLine().trim();
-                if (!line.isEmpty()) {
-                    payloads.add(parseRow(line, headerIndex, correlationId));
-                    rowCount++;
-                }
-            }
-        }
-
-        log.debug("profileReadsCsvMapped", correlationId,
-            "rowCount", rowCount,
-            "totalPayloads", payloads.size());
-
-        return payloads;
-    }
-
+    /**
+     * Builds a column-name → column-index map from the CSV header line.
+     * Header names are normalised to lower-case so lookup is case-insensitive.
+     */
     public Map<String, Integer> buildHeaderIndex(String headerLine) {
-        String[] headers = parseCsvLine(headerLine);
+        String[] headers = splitCsvLine(headerLine);
         Map<String, Integer> headerIndex = new LinkedHashMap<>();
         for (int i = 0; i < headers.length; i++) {
             headerIndex.put(headers[i].trim().toLowerCase(Locale.ROOT), i);
@@ -65,52 +59,90 @@ public class ProfileReadsMapper {
         return headerIndex;
     }
 
+    /**
+     * Validates that all required columns are present in the header.
+     *
+     * @throws ValidationException listing every missing column name
+     */
     public void validateHeaders(Map<String, Integer> headerIndex, String correlationId) {
-        List<String> missingHeaders = new ArrayList<>();
-        for (String header : REQUIRED_HEADERS) {
-            if (!headerIndex.containsKey(header)) {
-                missingHeaders.add(header);
+        List<String> missing = new ArrayList<>();
+        for (String required : REQUIRED_HEADERS) {
+            if (!headerIndex.containsKey(required)) {
+                missing.add(required);
             }
         }
-
-        if (!missingHeaders.isEmpty()) {
+        if (!missing.isEmpty()) {
             throw ValidationException.invalidFormat(
-                "CSV header", "missing required header(s): " + String.join(", ", missingHeaders), correlationId);
+                "CSV header",
+                "missing required column(s): " + String.join(", ", missing),
+                correlationId);
         }
     }
 
-    public ProfileReadPayload parseRow(String line, Map<String, Integer> headerIndex, String correlationId) {
-        String[] fields = parseCsvLine(line);
+    /**
+     * Parses one data row into a {@link ProfileReadPayload}.
+     *
+     * @throws TransformationException if a required field is absent or empty
+     */
+    public ProfileReadPayload parseRow(String line, Map<String, Integer> headerIndex,
+                                       String correlationId) {
+        String[] fields = splitCsvLine(line);
+
+        String verb        = requireField(fields, headerIndex, COL_VERB,         correlationId);
+        String noun        = requireField(fields, headerIndex, COL_NOUN,         correlationId);
+        String mRID        = requireField(fields, headerIndex, COL_MRID,         correlationId);
+        String readingType = requireField(fields, headerIndex, COL_READING_TYPE, correlationId);
+        String timeStamp   = requireField(fields, headerIndex, COL_TIMESTAMP,    correlationId);
+        String value       = getField(fields, headerIndex, COL_VALUE);  // value may be 0.0 or empty
+
+        log.debug("profileReadRowParsed", correlationId,
+            "mRID",        mRID,
+            "readingType", readingType,
+            "timeStamp",   timeStamp,
+            "value",       value);
 
         return ProfileReadPayload.builder()
-            .externalId(getField(fields, headerIndex, "externalid", correlationId))
-            .sourceHes(getField(fields, headerIndex, "sourcehes", correlationId))
-            .profileName(getField(fields, headerIndex, "profilename", correlationId))
-            .registers(parseList(getField(fields, headerIndex, "registers", correlationId)))
-            .readings(parseList(getField(fields, headerIndex, "readings", correlationId)))
+            .verb(verb)
+            .noun(noun)
+            .mRID(mRID)
+            .readingType(readingType)
+            .timeStamp(timeStamp)
+            .value(value)
             .build();
     }
 
-    private String getField(String[] fields, Map<String, Integer> headerIndex,
-                            String headerName, String correlationId) {
-        Integer index = headerIndex.get(headerName);
-        if (index == null || index >= fields.length) {
-            throw TransformationException.mappingFailed(headerName, "CSV value", correlationId, null);
-        }
-        return fields[index].trim();
-    }
+    // ── Private helpers ───────────────────────────────────────────────────────
 
-    private String[] parseCsvLine(String line) {
+    /**
+     * Splits a CSV line by comma.
+     * Handles trailing commas (empty last field) via the {@code -1} limit.
+     */
+    private String[] splitCsvLine(String line) {
         return line.split(",", -1);
     }
 
-    private List<String> parseList(String rawValue) {
-        if (rawValue == null || rawValue.isBlank()) {
-            return List.of();
+    /**
+     * Returns the trimmed field value for {@code column}, throwing
+     * {@link TransformationException} if the column is missing or the value is blank.
+     */
+    private String requireField(String[] fields, Map<String, Integer> headerIndex,
+                                 String column, String correlationId) {
+        String value = getField(fields, headerIndex, column);
+        if (value == null || value.isBlank()) {
+            throw TransformationException.mappingFailed(column, "CSV value", correlationId, null);
         }
-        return Arrays.stream(rawValue.split("[;|]", -1))
-            .map(String::trim)
-            .filter(value -> !value.isEmpty())
-            .collect(Collectors.toList());
+        return value;
+    }
+
+    /**
+     * Returns the trimmed field value for {@code column}, or {@code null} if the
+     * column index is beyond the available fields (tolerates short rows).
+     */
+    private String getField(String[] fields, Map<String, Integer> headerIndex, String column) {
+        Integer index = headerIndex.get(column);
+        if (index == null || index >= fields.length) {
+            return null;
+        }
+        return fields[index].trim();
     }
 }
