@@ -4,6 +4,7 @@ import com.pge.krakencis.exceptions.ValidationException;
 import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.mappers.profilereads.ProfileReadsMapper;
+import com.pge.krakencis.models.profilereads.KafkaProfileReadPayload;
 import com.pge.krakencis.models.profilereads.ProfileReadPayload;
 import com.pge.krakencis.processors.BaseProcessor;
 import org.apache.camel.Exchange;
@@ -18,23 +19,24 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Parses an FTP-delivered CSV file into a list of {@link ProfileReadPayload} objects
- * ready for Kafka publishing.
+ * Parses an FTP-delivered CSV file and produces a list of
+ * {@link KafkaProfileReadPayload} objects ready for Kafka publishing.
  *
- * <h3>Streaming</h3>
- * <p>The file body is read as an {@link InputStream} and processed line-by-line via
- * a {@link BufferedReader}. The full file content is never materialised as a single
- * {@code String}, so even very large CSV files do not cause heap pressure.
+ * <h3>Pipeline</h3>
+ * <ol>
+ *   <li><b>Parse</b> — streams the CSV line-by-line, maps each data row to a raw
+ *       {@link ProfileReadPayload} via {@link ProfileReadsMapper#parseRow}.</li>
+ *   <li><b>Group</b> — calls {@link ProfileReadsMapper#toKafkaMessages} to aggregate
+ *       raw rows by mRID → ReadingType, producing one {@link KafkaProfileReadPayload}
+ *       per unique mRID with nested registers and readings.</li>
+ * </ol>
  *
  * <h3>Per-row error isolation</h3>
- * <p>If an individual data row fails parsing or validation, that row is skipped and
- * logged as a warning — it does not fail the entire file. The exchange body is set to
- * the list of successfully parsed payloads.
- *
- * <p>The file is moved to {@code .error} (and the exchange fails) only when:
+ * A bad data row is skipped and logged — it does not fail the whole file.
+ * The file is moved to the error directory only when:
  * <ul>
- *   <li>The file body is empty or missing.</li>
- *   <li>The header line is absent or missing required columns.</li>
+ *   <li>The file body is empty.</li>
+ *   <li>The header row is missing or lacks required columns.</li>
  *   <li>Every data row fails — no successful payloads at all.</li>
  * </ul>
  */
@@ -59,14 +61,14 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
             throw ValidationException.missingField("FTP CSV body", correlationId);
         }
 
-        List<ProfileReadPayload> payloads = new ArrayList<>();
+        // ── Step 1: parse CSV rows ────────────────────────────────────────────
+        List<ProfileReadPayload> rawRows = new ArrayList<>();
         int skippedRows  = 0;
         int dataRowsSeen = 0;
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
 
-            // ── Header ────────────────────────────────────────────────────────
             String headerLine = reader.readLine();
             if (headerLine == null || headerLine.isBlank()) {
                 throw ValidationException.missingField("FTP CSV header", correlationId);
@@ -75,7 +77,6 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
             Map<String, Integer> headerIndex = profileReadsMapper.buildHeaderIndex(headerLine);
             profileReadsMapper.validateHeaders(headerIndex, correlationId);
 
-            // ── Data rows — per-row isolation ─────────────────────────────────
             String line;
             int lineNumber = 1;
             while ((line = reader.readLine()) != null) {
@@ -85,7 +86,7 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
 
                 dataRowsSeen++;
                 try {
-                    payloads.add(profileReadsMapper.parseRow(trimmed, headerIndex, correlationId));
+                    rawRows.add(profileReadsMapper.parseRow(trimmed, headerIndex, correlationId));
                 } catch (Exception e) {
                     skippedRows++;
                     log.warn("profileReadRowSkipped", correlationId,
@@ -97,24 +98,30 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
             }
         }
 
-        // ── Outcome ───────────────────────────────────────────────────────────
-        if (dataRowsSeen > 0 && payloads.isEmpty()) {
+        if (dataRowsSeen > 0 && rawRows.isEmpty()) {
             throw ValidationException.missingField(
                 "parseable CSV rows (all " + dataRowsSeen + " rows failed)", correlationId);
         }
 
         if (skippedRows > 0) {
             log.warn("profileReadsCsvPartialSuccess", correlationId,
-                "fileName",    fileName,
-                "published",   payloads.size(),
-                "skipped",     skippedRows);
+                "fileName",  fileName,
+                "parsed",    rawRows.size(),
+                "skipped",   skippedRows);
         }
 
-        log.info("profileReadsCsvParsed", correlationId,
-            "fileName",     fileName,
-            "payloadCount", payloads.size(),
-            "skippedCount", skippedRows);
+        // ── Step 2: group raw rows → Kafka messages ───────────────────────────
+        // Groups by mRID, then ReadingType.
+        // One KafkaProfileReadPayload per unique mRID → one Kafka message per mRID.
+        List<KafkaProfileReadPayload> kafkaMessages =
+            profileReadsMapper.toKafkaMessages(rawRows, correlationId);
 
-        exchange.getIn().setBody(payloads);
+        log.info("profileReadsCsvProcessed", correlationId,
+            "fileName",      fileName,
+            "csvRows",       rawRows.size(),
+            "kafkaMessages", kafkaMessages.size(),
+            "skipped",       skippedRows);
+
+        exchange.getIn().setBody(kafkaMessages);
     }
 }
