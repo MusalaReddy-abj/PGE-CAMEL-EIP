@@ -45,4 +45,13 @@ public class HttpOutboundRequest {
 
     @Builder.Default
     private int timeoutMs = 30_000;
+
+    /** Logical service name used for DLQ/retry-queue context (e.g. {@code SOA-RCDC-TargetService}). */
+    private String serviceName;
+
+    /**
+     * Per-request retry override. {@code null} means use the global
+     * {@code http.client.retry.max-attempts} setting.
+     */
+    private Integer maxRetryAttempts;
 }

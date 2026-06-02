@@ -56,6 +56,8 @@ public class SOARCDCRequestService {
             .contentType(endpoint.getContentType())
             .body(jsonPayload)
             .timeoutMs(endpoint.getTimeout())
+            .serviceName(SERVICE_NAME)
+            .maxRetryAttempts(endpoint.getMaxRetryAttempts())
             .build();
 
         HttpOutboundResponse response = httpClientService.send(request, correlationId);

@@ -35,9 +35,15 @@ public class ExternalServiceProperties {
 
     @Data
     public static class ServiceEndpoint {
-        private String url;
-        private int    timeout     = 30_000;
-        private String contentType = "application/json";
+        private String  url;
+        private int     timeout          = 30_000;
+        private String  contentType      = "application/json";
+
+        /**
+         * Per-service retry override. {@code null} inherits from
+         * {@code http.client.retry.max-attempts}.
+         */
+        private Integer maxRetryAttempts;
     }
 
     /**
