@@ -10,25 +10,20 @@ import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.mappers.rcdc.response.RcdcMdmNotificationMapper;
 import com.pge.krakencis.models.rcdc.response.RcdcHesResponseMessage;
 import com.pge.krakencis.processors.BaseProcessor;
+import com.pge.krakencis.services.NetworkExceptionUtils;
 import com.pge.krakencis.services.SOAMDMNotificationService;
 import org.apache.camel.Exchange;
 import org.springframework.stereotype.Component;
 
-import java.io.InterruptedIOException;
-import java.net.ConnectException;
-import java.net.SocketTimeoutException;
-import java.net.UnknownHostException;
-
 /**
  * Sends an RCDC switch-state notification to the MDM SOAP service.
  *
- * <p>Retry logic is handled at the Camel route level
- * ({@link com.pge.krakencis.routes.rcdc.response.RcdcResponseHesKafkaListner}).
- * This processor throws typed exceptions so the route can decide:
+ * <p>Throws typed exceptions so the Camel route ({@link com.pge.krakencis.routes.rcdc.response.RcdcResponseHesKafkaListner})
+ * can decide routing:
  * <ul>
- *   <li>{@link TransformationException} — JSON/SOAP mapping failed → DLQ immediately</li>
- *   <li>{@link RetryableException}      — 5xx / network error → retry 3× then retry queue</li>
- *   <li>{@link ExternalServiceException}— 4xx client error → DLQ immediately</li>
+ *   <li>{@link TransformationException} — JSON/SOAP mapping failed → DLQ</li>
+ *   <li>{@link RetryableException}      — 5xx / 404 / network → retry 3× → retry queue</li>
+ *   <li>{@link ExternalServiceException}— other 4xx → DLQ</li>
  * </ul>
  */
 @Component
@@ -93,18 +88,16 @@ public class RcdcMdmNotificationProcessor extends BaseProcessor {
 
             log.warn("mdmNotificationFailed", correlationId, "httpStatus", status);
 
-            // Retryable: 5xx, 408 (timeout), 429 (rate-limit), 404 (service not found — may be transient)
             if (status >= 500 || status == 408 || status == 429 || status == 404) {
                 throw RetryableException.transient_(
                     SERVICE_NAME + " returned HTTP " + status, correlationId);
             }
-            // All other 4xx → permanent client error, goes to DLQ
             throw ExternalServiceException.httpError(SERVICE_NAME, status, "", correlationId);
 
         } catch (RetryableException | ExternalServiceException | TransformationException e) {
             throw e;
         } catch (Exception e) {
-            if (isNetworkException(e)) {
+            if (NetworkExceptionUtils.isNetworkException(e)) {
                 log.warn("mdmNotificationNetworkError", correlationId,
                     "error", e.getMessage(), "exceptionType", e.getClass().getSimpleName());
                 throw RetryableException.networkError(
@@ -112,17 +105,5 @@ public class RcdcMdmNotificationProcessor extends BaseProcessor {
             }
             throw e;
         }
-    }
-
-    private boolean isNetworkException(Exception e) {
-        Throwable cause = e.getCause() != null ? e.getCause() : e;
-        return cause instanceof ConnectException
-            || cause instanceof SocketTimeoutException
-            || cause instanceof UnknownHostException
-            || cause instanceof InterruptedIOException
-            || (e.getMessage() != null && (
-                e.getMessage().contains("Connection refused")
-             || e.getMessage().contains("timeout")
-             || e.getMessage().contains("Temporary failure")));
     }
 }
