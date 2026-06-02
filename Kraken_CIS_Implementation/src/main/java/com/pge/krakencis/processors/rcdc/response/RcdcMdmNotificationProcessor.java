@@ -93,10 +93,12 @@ public class RcdcMdmNotificationProcessor extends BaseProcessor {
 
             log.warn("mdmNotificationFailed", correlationId, "httpStatus", status);
 
-            if (status >= 500 || status == 408 || status == 429) {
+            // Retryable: 5xx, 408 (timeout), 429 (rate-limit), 404 (service not found — may be transient)
+            if (status >= 500 || status == 408 || status == 429 || status == 404) {
                 throw RetryableException.transient_(
                     SERVICE_NAME + " returned HTTP " + status, correlationId);
             }
+            // All other 4xx → permanent client error, goes to DLQ
             throw ExternalServiceException.httpError(SERVICE_NAME, status, "", correlationId);
 
         } catch (RetryableException | ExternalServiceException | TransformationException e) {
