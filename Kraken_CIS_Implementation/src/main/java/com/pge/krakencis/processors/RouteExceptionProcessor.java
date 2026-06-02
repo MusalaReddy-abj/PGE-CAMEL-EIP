@@ -12,24 +12,15 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Factory for typed Camel {@link org.apache.camel.Processor} instances that convert
- * domain exceptions into structured JSON error responses.
- *
- * <p>Intended to be used exclusively through {@link com.pge.krakencis.routes.BaseRoute}.
- * Each factory method returns a {@code Processor} that:
- * <ol>
- *   <li>Extracts the exception from {@code Exchange.EXCEPTION_CAUGHT}.</li>
- *   <li>Logs the failure via {@link com.pge.krakencis.logging.AuditLogger}.</li>
- *   <li>Sets an appropriate HTTP status code and a JSON body containing
- *       {@code errorCode} and {@code message}.</li>
- * </ol>
+ * Factory for typed Camel {@link Processor} instances that convert domain exceptions
+ * into structured JSON error responses.
  *
  * <h3>HTTP status mapping</h3>
  * <ul>
- *   <li>{@link com.pge.krakencis.exceptions.ValidationException} → 400</li>
- *   <li>{@link com.pge.krakencis.exceptions.TransformationException} → 422</li>
- *   <li>{@link com.pge.krakencis.exceptions.KrakenBaseException} → 500</li>
- *   <li>{@link Exception} → 500 with code {@code SYS-001}</li>
+ *   <li>{@link ValidationException}     → 400</li>
+ *   <li>{@link TransformationException} → 422</li>
+ *   <li>{@link KrakenBaseException}     → 500</li>
+ *   <li>{@link Exception}               → 503 after retries (includes retry count)</li>
  * </ul>
  */
 @Component
@@ -74,6 +65,26 @@ public class RouteExceptionProcessor {
             Exception ex = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Exception.class);
             auditLogger.logFailure(exchange, operation, ex);
             respond(exchange, 500, "SYS-001", "Internal server error", null);
+        };
+    }
+
+    /**
+     * Used by HTTP listener routes after all 3 retry attempts are exhausted.
+     * Returns HTTP 503 with the number of retries attempted so callers can surface it.
+     */
+    public Processor systemWithRetryInfo(String operation) {
+        return exchange -> {
+            Exception ex    = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Exception.class);
+            int retries     = exchange.getIn().getHeader(Exchange.REDELIVERY_COUNTER, 0, Integer.class);
+            auditLogger.logFailure(exchange, operation, ex);
+
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("retriesAttempted", retries);
+            detail.put("cause", ex != null ? ex.getMessage() : "Unknown error");
+
+            respond(exchange, 503, "SYS-001",
+                "Service temporarily unavailable after " + retries + " retry attempt(s)",
+                detail);
         };
     }
 

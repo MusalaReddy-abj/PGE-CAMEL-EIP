@@ -1,6 +1,6 @@
 kafka:
   producer:
-    brokers: localhost:9092
+    brokers: 192.168.4.34:9092
     acks: all
     retries: 3
     request-timeout-ms: 30000
@@ -19,5 +19,9 @@ kafka:
   topic:
     alarms:             kraken-alarm-events
     rcdc:               kraken-rcdc-events
+    rcdc-retry:         kraken-rcdc-retry-events
+    rcdc-dlq:           kraken-rcdc-dlq-events
     rcdc-hes-response:  kraken-rcdc-hes-response-events
+    rcdc-hes-retry:     kraken-rcdc-hes-retry-events
+    rcdc-hes-dlq:       kraken-rcdc-hes-dlq-events
     profile-reads:      kraken-profile-reads-events
