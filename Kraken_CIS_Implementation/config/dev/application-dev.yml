@@ -29,3 +29,14 @@ kraken:
 ftp:
   profile-reads:
     include: ".*\\.csv"
+
+http:
+  client:
+    retry:
+      max-attempts: 3
+      initial-delay-ms: 1000
+      backoff-multiplier: 2.0
+      max-delay-ms: 30000
+      retryable-status-codes: [429, 500, 502, 503, 504]
+    dlq-topic: kraken-http-outbound-dlq
+    retry-topic: kraken-http-outbound-retry

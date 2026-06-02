@@ -46,6 +46,8 @@ public class SOAMDMNotificationService {
             .header("SOAPAction", "\"\"")              // empty SOAPAction for doc/literal
             .body(soapXmlPayload)
             .timeoutMs(endpoint.getTimeout())
+            .serviceName(SERVICE_NAME)
+            .maxRetryAttempts(endpoint.getMaxRetryAttempts())
             .build();
 
         HttpOutboundResponse response = httpClientService.send(request, correlationId);
