@@ -5,6 +5,7 @@ import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.mappers.profilereads.ProfileReadsMapper;
 import com.pge.krakencis.models.profilereads.KafkaProfileReadPayload;
+import com.pge.krakencis.models.profilereads.ProfileReadFailedRow;
 import com.pge.krakencis.models.profilereads.ProfileReadPayload;
 import com.pge.krakencis.processors.BaseProcessor;
 import org.apache.camel.Exchange;
@@ -14,36 +15,39 @@ import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Parses an FTP-delivered CSV file and produces a list of
- * {@link KafkaProfileReadPayload} objects ready for Kafka publishing.
+ * Parses an FTP- or S3-delivered CSV file and produces:
  *
- * <h3>Pipeline</h3>
- * <ol>
- *   <li><b>Parse</b> — streams the CSV line-by-line, maps each data row to a raw
- *       {@link ProfileReadPayload} via {@link ProfileReadsMapper#parseRow}.</li>
- *   <li><b>Group</b> — calls {@link ProfileReadsMapper#toKafkaMessages} to aggregate
- *       raw rows by mRID → ReadingType, producing one {@link KafkaProfileReadPayload}
- *       per unique mRID with nested registers and readings.</li>
- * </ol>
- *
- * <h3>Per-row error isolation</h3>
- * A bad data row is skipped and logged — it does not fail the whole file.
- * The file is moved to the error directory only when:
  * <ul>
- *   <li>The file body is empty.</li>
- *   <li>The header row is missing or lacks required columns.</li>
- *   <li>Every data row fails — no successful payloads at all.</li>
+ *   <li><b>Exchange body</b> — {@code List<KafkaProfileReadPayload>} of successfully
+ *       parsed rows, grouped by mRID + ReadingType, ready for Kafka publishing.</li>
+ *   <li><b>Exchange property {@link LogConstants#PROP_FAILED_ROWS}</b> —
+ *       {@code List<ProfileReadFailedRow>} of rows that failed to parse or validate.
+ *       Always set (empty list when all rows succeed). The calling route publishes
+ *       these to the profile-reads DLQ topic via
+ *       {@code direct:publishProfileReadsDlq}.</li>
  * </ul>
+ *
+ * <h3>Outcome summary</h3>
+ * <table border="1">
+ *   <tr><th>Condition</th><th>Body</th><th>PROP_FAILED_ROWS</th><th>Exception thrown</th></tr>
+ *   <tr><td>All rows OK</td><td>All payloads</td><td>empty list</td><td>—</td></tr>
+ *   <tr><td>Some rows fail</td><td>Good payloads</td><td>failed rows → DLQ</td><td>—</td></tr>
+ *   <tr><td>All rows fail</td><td>—</td><td>—</td><td>ValidationException → error dir</td></tr>
+ *   <tr><td>Header missing/corrupt</td><td>—</td><td>—</td><td>ValidationException → error dir</td></tr>
+ * </table>
  */
 @Component
 public class ProfileReadsCsvProcessor extends BaseProcessor {
 
-    private static final StructuredLogger log = StructuredLogger.of(ProfileReadsCsvProcessor.class);
+    private static final StructuredLogger   log       = StructuredLogger.of(ProfileReadsCsvProcessor.class);
+    private static final DateTimeFormatter  TIMESTAMP = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
 
     private final ProfileReadsMapper profileReadsMapper;
 
@@ -58,25 +62,26 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
 
         InputStream inputStream = exchange.getIn().getBody(InputStream.class);
         if (inputStream == null) {
-            throw ValidationException.missingField("FTP CSV body", correlationId);
+            throw ValidationException.missingField("CSV body", correlationId);
         }
 
-        // ── Step 1: parse CSV rows ────────────────────────────────────────────
-        List<ProfileReadPayload> rawRows = new ArrayList<>();
-        int skippedRows  = 0;
+        List<ProfileReadPayload>  rawRows    = new ArrayList<>();
+        List<ProfileReadFailedRow> failedRows = new ArrayList<>();
         int dataRowsSeen = 0;
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
 
+            // ── Header ────────────────────────────────────────────────────────
             String headerLine = reader.readLine();
             if (headerLine == null || headerLine.isBlank()) {
-                throw ValidationException.missingField("FTP CSV header", correlationId);
+                throw ValidationException.missingField("CSV header", correlationId);
             }
 
             Map<String, Integer> headerIndex = profileReadsMapper.buildHeaderIndex(headerLine);
             profileReadsMapper.validateHeaders(headerIndex, correlationId);
 
+            // ── Data rows — per-row isolation ─────────────────────────────────
             String line;
             int lineNumber = 1;
             while ((line = reader.readLine()) != null) {
@@ -88,7 +93,17 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
                 try {
                     rawRows.add(profileReadsMapper.parseRow(trimmed, headerIndex, correlationId));
                 } catch (Exception e) {
-                    skippedRows++;
+                    // Row failed — collect for DLQ, do not fail the whole file
+                    failedRows.add(ProfileReadFailedRow.builder()
+                        .fileName(fileName)
+                        .lineNumber(lineNumber)
+                        .rawLine(trimmed)
+                        .errorType(e.getClass().getSimpleName())
+                        .errorMessage(e.getMessage())
+                        .correlationId(correlationId)
+                        .timestamp(OffsetDateTime.now().format(TIMESTAMP))
+                        .build());
+
                     log.warn("profileReadRowSkipped", correlationId,
                         "fileName",   fileName,
                         "lineNumber", lineNumber,
@@ -98,21 +113,20 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
             }
         }
 
+        // ── Fail the whole file only when every row is bad ────────────────────
         if (dataRowsSeen > 0 && rawRows.isEmpty()) {
             throw ValidationException.missingField(
                 "parseable CSV rows (all " + dataRowsSeen + " rows failed)", correlationId);
         }
 
-        if (skippedRows > 0) {
-            log.warn("profileReadsCsvPartialSuccess", correlationId,
-                "fileName",  fileName,
-                "parsed",    rawRows.size(),
-                "skipped",   skippedRows);
+        if (!failedRows.isEmpty()) {
+            log.warn("profileReadsCsvPartialFailure", correlationId,
+                "fileName",    fileName,
+                "successful",  rawRows.size(),
+                "failed",      failedRows.size());
         }
 
-        // ── Step 2: group raw rows → Kafka messages ───────────────────────────
-        // Groups by mRID, then ReadingType.
-        // One KafkaProfileReadPayload per unique mRID → one Kafka message per mRID.
+        // ── Group successful rows → Kafka messages ────────────────────────────
         List<KafkaProfileReadPayload> kafkaMessages =
             profileReadsMapper.toKafkaMessages(rawRows, correlationId);
 
@@ -120,8 +134,11 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
             "fileName",      fileName,
             "csvRows",       rawRows.size(),
             "kafkaMessages", kafkaMessages.size(),
-            "skipped",       skippedRows);
+            "failedRows",    failedRows.size());
 
+        // Exchange body  = successful payloads → published to main topic
+        // Exchange prop  = failed rows → published to DLQ by the calling route
         exchange.getIn().setBody(kafkaMessages);
+        exchange.setProperty(LogConstants.PROP_FAILED_ROWS, failedRows);
     }
 }

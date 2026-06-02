@@ -4,16 +4,16 @@ spring:
   profiles:
     active: dev
   config:
-    import: optional:classpath:kafka.yml,optional:classpath:ftp.yml
+    import: optional:classpath:kafka.yml,optional:classpath:ftp.yml,optional:classpath:s3.yml
 
 # Spring Boot embedded server (Actuator management endpoints only)
 server:
-  port: 9081
+  port: 8081
 
 # Camel Undertow REST API (main application port)
 rest:
   host: 0.0.0.0
-  port: 9080
+  port: 8080
 
 # External service endpoints — all outbound target URLs configured here.
 # Override per environment in config/{env}/application-{env}.yml

@@ -25,3 +25,4 @@ kafka:
     rcdc-hes-retry:     kraken-rcdc-hes-retry-events
     rcdc-hes-dlq:       kraken-rcdc-hes-dlq-events
     profile-reads:      kraken-profile-reads-events
+    profile-reads-dlq:  kraken-profile-reads-dlq-events

@@ -40,5 +40,9 @@ public final class LogConstants {
     public static final String PROP_SERVICE_NAME    = "serviceName";
     public static final String PROP_RETRY_ATTEMPT   = "retryAttempt";
 
+    // Profile Reads CSV partial-failure exchange property
+    // Value type: List<com.pge.krakencis.models.profilereads.ProfileReadFailedRow>
+    public static final String PROP_FAILED_ROWS     = "profileReads.failedRows";
+
     private LogConstants() {}
 }
