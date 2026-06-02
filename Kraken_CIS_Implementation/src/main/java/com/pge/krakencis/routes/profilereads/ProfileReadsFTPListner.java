@@ -80,7 +80,9 @@ public class ProfileReadsFTPListner extends BaseRoute {
             .process(profileReadsCsvProcessor)
             .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsTopic))
             .to("direct:publishToKafka")
-            .to("direct:publishProfileReadsDlq")   // publishes any partial-failure rows to DLQ
+            .to("direct:publishProfileReadsDlq")        // partial-failure rows → DLQ
+            .setProperty("profileReads.source", constant("FTP"))
+            .to("direct:publishProfileReadsAudit")      // file-level audit report → audit topic
             .process(routeLoggingProcessor.exit(OPERATION));
     }
 

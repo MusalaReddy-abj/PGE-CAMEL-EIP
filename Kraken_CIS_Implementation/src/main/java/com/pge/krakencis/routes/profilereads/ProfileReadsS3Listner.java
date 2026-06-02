@@ -94,7 +94,9 @@ public class ProfileReadsS3Listner extends BaseRoute {
             .process(profileReadsCsvProcessor)                                  // ← reused from FTP flow
             .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsTopic))
             .to("direct:publishToKafka")                                        // ← reused from FTP flow
-            .to("direct:publishProfileReadsDlq")                                // publishes any partial-failure rows to DLQ
+            .to("direct:publishProfileReadsDlq")                                // partial-failure rows → DLQ
+            .setProperty("profileReads.source", constant("S3"))
+            .to("direct:publishProfileReadsAudit")                              // file-level audit report → audit topic
             .process(this::moveToArchive)
             .process(routeLoggingProcessor.exit(OPERATION));
     }

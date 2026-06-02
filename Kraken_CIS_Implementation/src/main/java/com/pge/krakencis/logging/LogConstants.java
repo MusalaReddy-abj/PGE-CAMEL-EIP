@@ -44,5 +44,9 @@ public final class LogConstants {
     // Value type: List<com.pge.krakencis.models.profilereads.ProfileReadFailedRow>
     public static final String PROP_FAILED_ROWS     = "profileReads.failedRows";
 
+    // Profile Reads CSV processing counts — set by ProfileReadsCsvProcessor
+    public static final String PROP_TOTAL_ROWS      = "profileReads.totalRows";
+    public static final String PROP_SUCCESS_ROWS    = "profileReads.successRows";
+
     private LogConstants() {}
 }

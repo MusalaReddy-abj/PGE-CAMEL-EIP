@@ -171,9 +171,15 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
             "finalBatch",         finalBatch.size(),
             "failedRows",         failedRows.size());
 
-        // Final batch goes to the route's to("direct:publishToKafka")
+        // ── Step 5: store counts for audit report and DLQ route ──────────────────
+        // successRows = rows that parsed OK (before grouping)
+        // dataRowsSeen - currentBatch.size() = rows already published in intermediate batches
+        int successRows = dataRowsSeen - failedRows.size();
+
         exchange.getIn().setBody(finalBatch);
-        exchange.setProperty(LogConstants.PROP_FAILED_ROWS, failedRows);
+        exchange.setProperty(LogConstants.PROP_FAILED_ROWS,  failedRows);
+        exchange.setProperty(LogConstants.PROP_TOTAL_ROWS,   dataRowsSeen);
+        exchange.setProperty(LogConstants.PROP_SUCCESS_ROWS, successRows);
         exchange.setProperty("profileReads.batchesPublished", intermediateBatches);
     }
 
