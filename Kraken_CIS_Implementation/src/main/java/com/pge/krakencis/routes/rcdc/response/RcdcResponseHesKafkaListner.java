@@ -1,5 +1,8 @@
 package com.pge.krakencis.routes.rcdc.response;
 
+import com.pge.krakencis.exceptions.RetryableException;
+import com.pge.krakencis.exceptions.TransformationException;
+import com.pge.krakencis.exceptions.ValidationException;
 import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.RouteLoggingProcessor;
 import com.pge.krakencis.logging.StructuredLogger;
@@ -8,30 +11,25 @@ import com.pge.krakencis.processors.RouteExceptionProcessor;
 import com.pge.krakencis.processors.rcdc.response.RcdcMdmNotificationProcessor;
 import com.pge.krakencis.routes.BaseRoute;
 import org.apache.camel.Exchange;
+import org.apache.camel.LoggingLevel;
 import org.apache.camel.component.kafka.KafkaConstants;
 import org.apache.camel.component.kafka.consumer.KafkaManualCommit;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.UUID;
 
 /**
- * Kafka consumer route that forwards HES (Head-End System) response events to the
- * MDM (Meter Data Management) notification service.
+ * Kafka consumer route that forwards HES response events to the MDM notification service.
  *
- * <p>Consumes from the {@code kafka.topic.rcdc-hes-response} topic (default:
- * {@code kraken-rcdc-hes-response-events}) using a dedicated consumer group
- * ({@code {kafka.consumer.group-id}-mdm}) so this consumer is independent of
- * any other consumers on the same topic.
- *
- * <h3>Processing steps</h3>
- * <ol>
- *   <li>Extract / generate a correlation ID from the Kafka message key.</li>
- *   <li>Delegate to {@link com.pge.krakencis.processors.rcdc.response.RcdcMdmNotificationProcessor},
- *       which calls the MDM SOAP endpoint via
- *       {@link com.pge.krakencis.services.SOAMDMNotificationService}.</li>
- *   <li>Commit the Kafka offset unconditionally in {@code doFinally} — errors are
- *       logged and skipped rather than replayed indefinitely.</li>
- * </ol>
+ * <h3>Retry policy</h3>
+ * <ul>
+ *   <li>Payload errors ({@link ValidationException}, {@link TransformationException})
+ *       → DLQ immediately, no retry.</li>
+ *   <li>Transient errors ({@link RetryableException}: MDM 5xx, 408, 429, network)
+ *       → retry 3× (1 s / 2 s / 4 s) → retry topic on exhaustion.</li>
+ *   <li>All other errors → DLQ.</li>
+ * </ul>
  *
  * <h3>Route ID</h3>
  * {@code route-rcdc-hes-kafka-consumer}
@@ -39,14 +37,22 @@ import java.util.UUID;
 @Component
 public class RcdcResponseHesKafkaListner extends BaseRoute {
 
-    private static final StructuredLogger log       = StructuredLogger.of(RcdcResponseHesKafkaListner.class);
-    private static final String           OPERATION = "consumeRcdcHesResponse";
+    private static final StructuredLogger log          = StructuredLogger.of(RcdcResponseHesKafkaListner.class);
+    private static final String           OPERATION    = "consumeRcdcHesResponse";
+    private static final String           SERVICE_NAME = "SOA-MDM-Service";
+    private static final int              MAX_RETRIES  = 3;
 
     private final RcdcMdmNotificationProcessor rcdcMdmNotificationProcessor;
 
-    public RcdcResponseHesKafkaListner(CorrelationIdProcessor      correlationIdProcessor,
-                                       RouteLoggingProcessor       routeLoggingProcessor,
-                                       RouteExceptionProcessor     exceptionProcessor,
+    @Value("${kafka.topic.rcdc-hes-retry:kraken-rcdc-hes-retry-events}")
+    private String hesRetryTopic;
+
+    @Value("${kafka.topic.rcdc-hes-dlq:kraken-rcdc-hes-dlq-events}")
+    private String hesDlqTopic;
+
+    public RcdcResponseHesKafkaListner(CorrelationIdProcessor       correlationIdProcessor,
+                                       RouteLoggingProcessor        routeLoggingProcessor,
+                                       RouteExceptionProcessor      exceptionProcessor,
                                        RcdcMdmNotificationProcessor rcdcMdmNotificationProcessor) {
         super(correlationIdProcessor, routeLoggingProcessor, exceptionProcessor);
         this.rcdcMdmNotificationProcessor = rcdcMdmNotificationProcessor;
@@ -63,16 +69,58 @@ public class RcdcResponseHesKafkaListner extends BaseRoute {
             + "&autoCommitEnable=false&allowManualCommit=true";
 
         from(uri).routeId("route-rcdc-hes-kafka-consumer")
+
+            // ── Payload errors → DLQ immediately (no retry) ──────────────────
+            .onException(ValidationException.class, TransformationException.class)
+                .handled(true)
+                .process(exchange -> setErrorProps(exchange, hesDlqTopic, "DLQ"))
+                .to("direct:publishToDlq")
+                .process(this::commitOffset)
+            .end()
+
+            // ── Transient failures → retry 3× → retry queue ──────────────────
+            .onException(RetryableException.class)
+                .maximumRedeliveries(MAX_RETRIES)
+                .redeliveryDelay(1_000)
+                .backOffMultiplier(2)
+                .useExponentialBackOff()
+                .retryAttemptedLogLevel(LoggingLevel.WARN)
+                .handled(true)
+                .process(exchange -> setErrorProps(exchange, hesRetryTopic, "RETRY"))
+                .to("direct:publishToRetryQueue")
+                .process(this::commitOffset)
+            .end()
+
+            // ── All other errors → DLQ ────────────────────────────────────────
+            .onException(Exception.class)
+                .handled(true)
+                .process(exchange -> setErrorProps(exchange, hesDlqTopic, "DLQ"))
+                .to("direct:publishToDlq")
+                .process(this::commitOffset)
+            .end()
+
+            // ── Happy path ────────────────────────────────────────────────────
+            .process(exchange -> exchange.setProperty(
+                LogConstants.PROP_ORIGINAL_BODY, exchange.getIn().getBody(String.class)))
             .process(this::extractCorrelationId)
             .process(routeLoggingProcessor.entry(OPERATION))
-            .doTry()
-                .process(rcdcMdmNotificationProcessor)
-            .doCatch(Exception.class)
-                .process(exceptionProcessor.system(OPERATION))
-            .doFinally()
-                .process(this::commitOffset)
-                .process(routeLoggingProcessor.exit(OPERATION))
-            .end();
+            .process(rcdcMdmNotificationProcessor)
+            .process(this::commitOffset)
+            .process(routeLoggingProcessor.exit(OPERATION));
+    }
+
+    private void setErrorProps(Exchange exchange, String topic, String destination) {
+        int attempt = exchange.getIn().getHeader(Exchange.REDELIVERY_COUNTER, 0, Integer.class) + 1;
+        exchange.setProperty(LogConstants.PROP_SERVICE_NAME,  SERVICE_NAME);
+        exchange.setProperty(LogConstants.PROP_RETRY_ATTEMPT, attempt);
+        if ("RETRY".equals(destination)) {
+            exchange.setProperty(LogConstants.PROP_RETRY_TOPIC, topic);
+        } else {
+            exchange.setProperty(LogConstants.PROP_DLQ_TOPIC, topic);
+        }
+        log.warn("rcdcHesKafkaMessageRouting",
+            exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+            "destination", destination, "topic", topic, "attempt", attempt);
     }
 
     private void extractCorrelationId(Exchange exchange) {

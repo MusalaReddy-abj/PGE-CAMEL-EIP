@@ -1,11 +1,16 @@
 ftp:
   common:
-    host: localhost
+    host: 192.168.4.34
     port: 21
-    username: anonymous
-    password: anonymous
+    username: ProfileReads
+    password: ProfileReads
 
   profile-reads:
+    connection:
+      host: 192.168.4.34
+      port: 21
+      username: ProfileReads
+      password: ProfileReads
     remote-directory: /Reads/profilereads
     move-directory: /Reads/Archive
     error-directory: /Reads/Error

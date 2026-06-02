@@ -33,5 +33,12 @@ public final class LogConstants {
     public static final String KAFKA_TOPIC          = "kafkaTopic";
     public static final String KAFKA_KEY            = "kafkaKey";
 
+    // Retry / error-routing exchange properties (Kafka consumer routes)
+    public static final String PROP_ORIGINAL_BODY   = "originalBody";
+    public static final String PROP_RETRY_TOPIC     = "retryTopic";
+    public static final String PROP_DLQ_TOPIC       = "dlqTopic";
+    public static final String PROP_SERVICE_NAME    = "serviceName";
+    public static final String PROP_RETRY_ATTEMPT   = "retryAttempt";
+
     private LogConstants() {}
 }
