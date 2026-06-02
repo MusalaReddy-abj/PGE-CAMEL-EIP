@@ -9,9 +9,13 @@ ftp:
     remote-directory: /Reads/profilereads
     move-directory: /Reads/Archive
     error-directory: /Reads/Error
-    include: "*.csv"
+    include: ".*\\.csv"
     delay-ms: 60000
-    binary: true
+    binary: false
+    charset: UTF-8
     passive-mode: true
     read-lock: changed
     read-lock-min-age-ms: 1000
+    max-messages-per-poll: 50
+    thread-pool-size: 4
+    idempotent: true
