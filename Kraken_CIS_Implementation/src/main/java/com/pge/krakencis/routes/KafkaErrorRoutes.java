@@ -1,75 +1,91 @@
 package com.pge.krakencis.routes;
 
+import com.pge.krakencis.configs.KafkaProducerConfig;
 import com.pge.krakencis.exceptions.ExternalServiceException;
 import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.StructuredLogger;
-import com.pge.krakencis.models.OutboundRequestEvent;
 import org.apache.camel.Exchange;
 import org.apache.camel.builder.RouteBuilder;
+import org.apache.camel.component.kafka.KafkaConstants;
 import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 
 /**
- * Reusable Camel routes for publishing failed Kafka consumer messages to either
- * a retry queue or the Dead Letter Queue (DLQ).
+ * Camel routes that route failed Kafka consumer messages to the retry queue
+ * or the Dead Letter Queue (DLQ).
  *
- * <h3>Callers must set these exchange properties before routing here:</h3>
+ * <h3>Message contract</h3>
+ * <p>The Kafka record published to the retry / DLQ topic preserves the
+ * <b>original message body exactly as it was consumed</b> from the source topic —
+ * no wrapper object, no reformatting. Error context is attached as
+ * <b>Kafka record headers</b> so consumers and monitoring tools can inspect
+ * failures without parsing the payload.
+ *
+ * <h3>Kafka record headers set on every error message</h3>
+ * <pre>
+ * X-Destination-Type   RETRY | DLQ
+ * X-Correlation-ID     end-to-end trace ID
+ * X-Service-Name       downstream service that failed
+ * X-Error-Type         Java exception simple name
+ * X-Error-Message      exception message
+ * X-Error-Http-Status  HTTP status code (0 = connection failure)
+ * X-Error-Attempt      attempt number on final failure
+ * X-Error-Timestamp    ISO-8601 timestamp of the failure
+ * </pre>
+ *
+ * <h3>Callers must set these exchange properties before routing here</h3>
  * <ul>
- *   <li>{@link LogConstants#PROP_ORIGINAL_BODY}  — original Kafka message body (String)</li>
+ *   <li>{@link LogConstants#PROP_ORIGINAL_BODY}  — raw Kafka message body (String)</li>
  *   <li>{@link LogConstants#PROP_SERVICE_NAME}   — downstream service name</li>
  *   <li>{@link LogConstants#PROP_RETRY_ATTEMPT}  — attempt number on final failure</li>
- *   <li>{@link LogConstants#PROP_RETRY_TOPIC}    — Kafka retry topic name (for retry route)</li>
- *   <li>{@link LogConstants#PROP_DLQ_TOPIC}      — Kafka DLQ topic name (for DLQ route)</li>
- *   <li>{@link Exchange#EXCEPTION_CAUGHT}        — the caught exception (set by Camel)</li>
- * </ul>
- *
- * <h3>Routes provided:</h3>
- * <ul>
- *   <li>{@code direct:publishToRetryQueue} — transient failure; consumer should re-attempt later</li>
- *   <li>{@code direct:publishToDlq}        — permanent failure; requires manual investigation</li>
+ *   <li>{@link LogConstants#PROP_RETRY_TOPIC}    — retry topic name (retry route only)</li>
+ *   <li>{@link LogConstants#PROP_DLQ_TOPIC}      — DLQ topic name (DLQ route only)</li>
+ *   <li>{@link Exchange#EXCEPTION_CAUGHT}        — set automatically by Camel</li>
  * </ul>
  */
 @Component
 public class KafkaErrorRoutes extends RouteBuilder {
 
     private static final StructuredLogger log = StructuredLogger.of(KafkaErrorRoutes.class);
-    private static final int              MAX_ATTEMPTS = 3;
+
+    private final KafkaProducerConfig kafkaProducerConfig;
+
+    public KafkaErrorRoutes(KafkaProducerConfig kafkaProducerConfig) {
+        this.kafkaProducerConfig = kafkaProducerConfig;
+    }
 
     @Override
     public void configure() {
+        final String kafkaQuery = kafkaProducerConfig.buildQueryString();
 
+        // ── Retry queue ───────────────────────────────────────────────────────
+        // Body  = original Kafka message (unchanged)
+        // Headers = error metadata for observability
         from("direct:publishToRetryQueue")
             .routeId("route-publish-retry-queue")
-            .process(exchange -> buildErrorEvent(exchange, "RETRY"))
-            .process(exchange -> exchange.setProperty(LogConstants.KAFKA_TOPIC,
-                                                       exchange.getProperty(LogConstants.PROP_RETRY_TOPIC)))
-            .process(exchange -> exchange.setProperty(LogConstants.KAFKA_KEY,
-                                                       exchange.getProperty(LogConstants.PROP_CORRELATION_ID)))
-            .to("direct:publishToKafka")
-            .process(exchange -> {
-                String cid   = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
-                String topic = exchange.getProperty(LogConstants.PROP_RETRY_TOPIC, String.class);
-                log.warn("messageRoutedToRetryQueue", cid, "retryTopic", topic);
-            });
+            .process(exchange -> prepareErrorMessage(exchange, "RETRY"))
+            .toD("kafka:${exchangeProperty." + LogConstants.PROP_RETRY_TOPIC + "}?" + kafkaQuery)
+            .process(exchange -> log.warn("messageRoutedToRetryQueue",
+                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                "retryTopic", exchange.getProperty(LogConstants.PROP_RETRY_TOPIC, String.class)));
 
+        // ── Dead Letter Queue ─────────────────────────────────────────────────
+        // Body  = original Kafka message (unchanged — ready for replay or inspection)
+        // Headers = error metadata for observability / alerting
         from("direct:publishToDlq")
             .routeId("route-publish-dlq")
-            .process(exchange -> buildErrorEvent(exchange, "DLQ"))
-            .process(exchange -> exchange.setProperty(LogConstants.KAFKA_TOPIC,
-                                                       exchange.getProperty(LogConstants.PROP_DLQ_TOPIC)))
-            .process(exchange -> exchange.setProperty(LogConstants.KAFKA_KEY,
-                                                       exchange.getProperty(LogConstants.PROP_CORRELATION_ID)))
-            .to("direct:publishToKafka")
-            .process(exchange -> {
-                String cid   = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
-                String topic = exchange.getProperty(LogConstants.PROP_DLQ_TOPIC, String.class);
-                log.error("messageRoutedToDlq", cid, "dlqTopic", topic);
-            });
+            .process(exchange -> prepareErrorMessage(exchange, "DLQ"))
+            .toD("kafka:${exchangeProperty." + LogConstants.PROP_DLQ_TOPIC + "}?" + kafkaQuery)
+            .process(exchange -> log.error("messageRoutedToDlq",
+                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                "dlqTopic", exchange.getProperty(LogConstants.PROP_DLQ_TOPIC, String.class)));
     }
 
-    private void buildErrorEvent(Exchange exchange, String eventType) {
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private void prepareErrorMessage(Exchange exchange, String destinationType) {
         String    correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
         String    originalBody  = exchange.getProperty(LogConstants.PROP_ORIGINAL_BODY,  String.class);
         String    serviceName   = exchange.getProperty(LogConstants.PROP_SERVICE_NAME,   String.class);
@@ -81,19 +97,23 @@ public class KafkaErrorRoutes extends RouteBuilder {
             httpStatus = ese.getHttpStatusCode();
         }
 
-        OutboundRequestEvent event = OutboundRequestEvent.builder()
-            .eventType(eventType)
-            .correlationId(correlationId)
-            .serviceName(serviceName)
-            .body(originalBody)
-            .attempt(attempt)
-            .maxAttempts(MAX_ATTEMPTS)
-            .httpStatus(httpStatus)
-            .errorType(ex != null ? ex.getClass().getSimpleName() : "Unknown")
-            .errorMessage(ex != null ? ex.getMessage()            : "Unknown error")
-            .timestamp(OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))
-            .build();
+        // ── Body: original Kafka message body, untouched ──────────────────────
+        exchange.getIn().setBody(originalBody != null ? originalBody : "");
 
-        exchange.getIn().setBody(event);
+        // ── Kafka message key ─────────────────────────────────────────────────
+        exchange.getIn().setHeader(KafkaConstants.KEY, correlationId);
+
+        // ── Kafka record headers: error metadata ──────────────────────────────
+        exchange.getIn().setHeader("X-Destination-Type",  destinationType);
+        exchange.getIn().setHeader("X-Correlation-ID",    correlationId);
+        exchange.getIn().setHeader("X-Service-Name",      serviceName);
+        exchange.getIn().setHeader("X-Error-Type",
+            ex != null ? ex.getClass().getSimpleName() : "Unknown");
+        exchange.getIn().setHeader("X-Error-Message",
+            ex != null ? ex.getMessage() : "Unknown error");
+        exchange.getIn().setHeader("X-Error-Http-Status", String.valueOf(httpStatus));
+        exchange.getIn().setHeader("X-Error-Attempt",     String.valueOf(attempt));
+        exchange.getIn().setHeader("X-Error-Timestamp",
+            OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
     }
 }

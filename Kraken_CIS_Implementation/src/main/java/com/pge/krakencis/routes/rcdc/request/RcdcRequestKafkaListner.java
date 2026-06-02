@@ -1,5 +1,6 @@
 package com.pge.krakencis.routes.rcdc.request;
 
+import com.pge.krakencis.exceptions.ExternalServiceException;
 import com.pge.krakencis.exceptions.RetryableException;
 import com.pge.krakencis.exceptions.TransformationException;
 import com.pge.krakencis.exceptions.ValidationException;
@@ -23,15 +24,24 @@ import java.util.UUID;
 /**
  * Kafka consumer route for inbound RCDC (Remote Connect/Disconnect Command) events.
  *
- * <h3>Retry policy</h3>
- * <ul>
- *   <li>Payload errors ({@link ValidationException}, {@link TransformationException})
- *       → DLQ immediately, no retry.</li>
- *   <li>Transient errors ({@link RetryableException}: 5xx, 408, 429, network)
- *       → retry 3× (1 s / 2 s / 4 s) → retry topic on exhaustion.</li>
- *   <li>All other errors → DLQ.</li>
- * </ul>
- * Kafka offset is committed in every path (success, retry-exhausted, DLQ).
+ * <h3>Error routing</h3>
+ * <table border="1">
+ *   <tr><th>Exception</th><th>Cause</th><th>Action</th></tr>
+ *   <tr><td>ValidationException / TransformationException</td>
+ *       <td>Payload is corrupt or invalid — permanent</td>
+ *       <td>DLQ immediately (no retry)</td></tr>
+ *   <tr><td>ExternalServiceException</td>
+ *       <td>4xx from SOA-RCDC — client error, permanent</td>
+ *       <td>DLQ immediately (no retry)</td></tr>
+ *   <tr><td>RetryableException</td>
+ *       <td>5xx / 408 / 429 / network — transient</td>
+ *       <td>Retry 3× (1s→2s→4s) then retry queue</td></tr>
+ *   <tr><td>Exception (any other)</td>
+ *       <td>Unknown / unexpected — may be transient</td>
+ *       <td>Retry 3× (1s→2s→4s) then retry queue</td></tr>
+ * </table>
+ *
+ * <p>Kafka offset is committed in every path to prevent infinite redelivery.
  *
  * <h3>Route ID</h3>
  * {@code route-rcdc-kafka-consumer}
@@ -75,7 +85,7 @@ public class RcdcRequestKafkaListner extends BaseRoute {
 
         from(uri).routeId("route-rcdc-kafka-consumer")
 
-            // ── Payload errors → DLQ immediately (no retry) ──────────────────
+            // ── Payload errors → DLQ (no retry — bad payload is permanent) ────
             .onException(ValidationException.class, TransformationException.class)
                 .handled(true)
                 .process(exchange -> setErrorProps(exchange, rcdcDlqTopic, "DLQ"))
@@ -83,7 +93,15 @@ public class RcdcRequestKafkaListner extends BaseRoute {
                 .process(this::commitOffset)
             .end()
 
-            // ── Transient failures → retry 3× → retry queue ──────────────────
+            // ── 4xx client error → DLQ (no retry — permanent rejection) ──────
+            .onException(ExternalServiceException.class)
+                .handled(true)
+                .process(exchange -> setErrorProps(exchange, rcdcDlqTopic, "DLQ"))
+                .to("direct:publishToDlq")
+                .process(this::commitOffset)
+            .end()
+
+            // ── Transient errors (5xx / network) → retry 3× → retry queue ────
             .onException(RetryableException.class)
                 .maximumRedeliveries(MAX_RETRIES)
                 .redeliveryDelay(1_000)
@@ -96,11 +114,16 @@ public class RcdcRequestKafkaListner extends BaseRoute {
                 .process(this::commitOffset)
             .end()
 
-            // ── All other errors → DLQ ────────────────────────────────────────
+            // ── Unknown errors → retry 3× → retry queue (may be transient) ───
             .onException(Exception.class)
+                .maximumRedeliveries(MAX_RETRIES)
+                .redeliveryDelay(1_000)
+                .backOffMultiplier(2)
+                .useExponentialBackOff()
+                .retryAttemptedLogLevel(LoggingLevel.WARN)
                 .handled(true)
-                .process(exchange -> setErrorProps(exchange, rcdcDlqTopic, "DLQ"))
-                .to("direct:publishToDlq")
+                .process(exchange -> setErrorProps(exchange, rcdcRetryTopic, "RETRY"))
+                .to("direct:publishToRetryQueue")
                 .process(this::commitOffset)
             .end()
 

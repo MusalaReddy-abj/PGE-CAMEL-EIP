@@ -4,24 +4,40 @@ import com.pge.krakencis.exceptions.KrakenBaseException;
 import com.pge.krakencis.exceptions.TransformationException;
 import com.pge.krakencis.exceptions.ValidationException;
 import com.pge.krakencis.logging.AuditLogger;
+import com.pge.krakencis.logging.LogConstants;
+import com.pge.krakencis.models.ErrorResponse;
 import org.apache.camel.Exchange;
 import org.apache.camel.Processor;
 import org.springframework.stereotype.Component;
 
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
  * Factory for typed Camel {@link Processor} instances that convert domain exceptions
- * into structured JSON error responses.
+ * into structured {@link ErrorResponse} JSON bodies.
  *
  * <h3>HTTP status mapping</h3>
  * <ul>
- *   <li>{@link ValidationException}     → 400</li>
- *   <li>{@link TransformationException} → 422</li>
- *   <li>{@link KrakenBaseException}     → 500</li>
- *   <li>{@link Exception}               → 503 after retries (includes retry count)</li>
+ *   <li>{@link ValidationException}     → 400 — includes list of field violations</li>
+ *   <li>{@link TransformationException} → 422 — mapping/serialization failure</li>
+ *   <li>{@link KrakenBaseException}     → 500 — domain error</li>
+ *   <li>{@link Exception}               → 503 after retries — includes retry count + cause</li>
  * </ul>
+ *
+ * <h3>Response body (all errors)</h3>
+ * <pre>
+ * {
+ *   "status":        400,
+ *   "errorCode":     "VAL-002",
+ *   "message":       "Required field is missing: payload.events",
+ *   "correlationId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+ *   "timestamp":     "2025-12-18T10:00:00+05:30",
+ *   "detail":        [...]          // present only when applicable
+ * }
+ * </pre>
  */
 @Component
 public class RouteExceptionProcessor {
@@ -32,6 +48,9 @@ public class RouteExceptionProcessor {
         this.auditLogger = auditLogger;
     }
 
+    // ── Exception-type handlers ───────────────────────────────────────────────
+
+    /** Handles {@link ValidationException} → HTTP 400. Detail: list of violation messages. */
     public Processor validation(String operation) {
         return exchange -> {
             ValidationException ex = exchange.getProperty(
@@ -42,6 +61,7 @@ public class RouteExceptionProcessor {
         };
     }
 
+    /** Handles {@link TransformationException} → HTTP 422. */
     public Processor transformation(String operation) {
         return exchange -> {
             TransformationException ex = exchange.getProperty(
@@ -51,6 +71,7 @@ public class RouteExceptionProcessor {
         };
     }
 
+    /** Handles {@link KrakenBaseException} → HTTP 500. */
     public Processor domain(String operation) {
         return exchange -> {
             KrakenBaseException ex = exchange.getProperty(
@@ -60,6 +81,7 @@ public class RouteExceptionProcessor {
         };
     }
 
+    /** Handles unexpected {@link Exception} → HTTP 500. */
     public Processor system(String operation) {
         return exchange -> {
             Exception ex = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Exception.class);
@@ -69,13 +91,13 @@ public class RouteExceptionProcessor {
     }
 
     /**
-     * Used by HTTP listener routes after all 3 retry attempts are exhausted.
-     * Returns HTTP 503 with the number of retries attempted so callers can surface it.
+     * Handles transient {@link Exception} after all 3 retry attempts are exhausted → HTTP 503.
+     * Detail includes {@code retriesAttempted} count and the root-cause message.
      */
     public Processor systemWithRetryInfo(String operation) {
         return exchange -> {
-            Exception ex    = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Exception.class);
-            int retries     = exchange.getIn().getHeader(Exchange.REDELIVERY_COUNTER, 0, Integer.class);
+            Exception ex  = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Exception.class);
+            int retries   = exchange.getIn().getHeader(Exchange.REDELIVERY_COUNTER, 0, Integer.class);
             auditLogger.logFailure(exchange, operation, ex);
 
             Map<String, Object> detail = new LinkedHashMap<>();
@@ -88,14 +110,23 @@ public class RouteExceptionProcessor {
         };
     }
 
+    // ── Core response builder ─────────────────────────────────────────────────
+
     private void respond(Exchange exchange, int httpStatus,
                           String code, String message, Object detail) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("errorCode", code);
-        body.put("message",   message);
-        if (detail != null) body.put("detail", detail);
 
-        exchange.getIn().setBody(body);
+        String correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
+
+        ErrorResponse errorResponse = ErrorResponse.builder()
+            .status(httpStatus)
+            .errorCode(code)
+            .message(message)
+            .correlationId(correlationId)
+            .timestamp(OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))
+            .detail(detail)
+            .build();
+
+        exchange.getIn().setBody(errorResponse);
         exchange.getIn().setHeader(Exchange.HTTP_RESPONSE_CODE, httpStatus);
         exchange.getIn().setHeader(Exchange.CONTENT_TYPE, "application/json");
     }
