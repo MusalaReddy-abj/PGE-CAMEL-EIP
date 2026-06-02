@@ -11,5 +11,3 @@ target/
 .project
 logs/*.log
 config/prod/application-prod.yml
-src/main/resources/ssl/*.jks
-src/main/resources/ssl/*.p12
