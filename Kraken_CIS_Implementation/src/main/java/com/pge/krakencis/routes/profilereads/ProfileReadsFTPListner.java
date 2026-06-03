@@ -92,11 +92,13 @@ public class ProfileReadsFTPListner extends BaseRoute {
         String    correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
         int       successRows   = exchange.getProperty(LogConstants.PROP_SUCCESS_ROWS, 0, Integer.class);
 
-        // CORRUPTED  — no rows were processed at all (bad header, wrong encoding, etc.)
-        // PARTIAL_FAILURE — exception thrown mid-stream; some rows were already published to Kafka
-        String status = (successRows > 0)
-            ? LogConstants.FILE_STATUS_PARTIAL_FAILURE
-            : LogConstants.FILE_STATUS_CORRUPTED;
+        // Format errors (ValidationException / TransformationException) always mean CORRUPTED —
+        // the file itself is malformed regardless of how many rows were published before detection.
+        // Other exceptions mid-stream where some rows succeeded → PARTIAL_FAILURE.
+        boolean isFormatError = ex instanceof ValidationException || ex instanceof TransformationException;
+        String status = isFormatError || successRows == 0
+            ? LogConstants.FILE_STATUS_CORRUPTED
+            : LogConstants.FILE_STATUS_PARTIAL_FAILURE;
 
         log.warn("profileReadFileFailed", correlationId,
             "fileName",  fileName,

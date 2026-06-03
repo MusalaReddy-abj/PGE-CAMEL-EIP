@@ -168,22 +168,21 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
             .process(this::commitOffset)
         .end();
 
-        // Transient service errors → retry 3× within this pass → retry queue
+        // Transient service errors → NO internal retries (the 5-min route delay is the back-off).
+        // One attempt per retry-queue read; if it fails, publish back to retry queue (or DLQ
+        // if RetryQueueExhaustedException is thrown by the attempt-check processor above).
         route.onException(RetryableException.class)
-            .maximumRedeliveries(MAX_RETRIES)
-            .redeliveryDelay(1_000)
-            .backOffMultiplier(2)
-            .useExponentialBackOff()
-            .retryAttemptedLogLevel(LoggingLevel.WARN)
+            .maximumRedeliveries(0)
             .handled(true)
             .process(exchange -> setErrorProps(exchange, retryTopic, "RETRY", serviceName))
             .to("direct:publishToRetryQueue")
             .process(this::commitOffset)
         .end();
 
-        // Any other unexpected error in retry consumer → DLQ (not retry queue)
-        // The message is already on its second chance; unknown errors are treated as permanent.
+        // Any other unexpected error in retry consumer → DLQ (not retry queue).
+        // No internal retries — same single-attempt policy as RetryableException above.
         route.onException(Exception.class)
+            .maximumRedeliveries(0)
             .handled(true)
             .process(exchange -> setErrorProps(exchange, dlqTopic, "DLQ", serviceName))
             .to("direct:publishToDlq")
