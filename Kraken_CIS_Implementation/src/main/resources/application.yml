@@ -41,6 +41,10 @@ external-services:
       url: http://192.168.4.34:9000/rcdcswitchstatus
       timeout: 30000
       content-type: "text/xml; charset=utf-8"
+    odr-mock:
+      url: http://192.168.4.34:9000/ondemandread
+      timeout: 30000
+      content-type: "text/xml; charset=utf-8"
 
 # HTTP outbound client — retry behaviour and error topic routing.
 # SOAP Server faults (detected in body on HTTP 200) are mapped to status 500
