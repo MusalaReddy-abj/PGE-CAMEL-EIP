@@ -3,8 +3,8 @@ aws:
     profile-reads:
       connection:
         region: ap-south-2
-        # IAM role authentication — no access-key or secret-key needed.
-        # The AWS SDK picks up credentials from the EC2/ECS instance role automatically.
+        # IAM role — no access-key or secret-key needed.
+        # buildUri() appends &useDefaultCredentialsProvider=true when this is true.
         use-default-credentials: true
       bucket-name: pge-int-demo
       source-prefix: Reads/profilereads/    # matches s3://pge-int-demo/Reads/profilereads/
