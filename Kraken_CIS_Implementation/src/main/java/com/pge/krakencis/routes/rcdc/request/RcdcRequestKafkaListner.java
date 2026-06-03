@@ -62,7 +62,10 @@ public class RcdcRequestKafkaListner extends BaseKafkaConsumerRoute {
             + "&groupId={{kafka.consumer.group-id:kraken-cis-group}}"
             + "&autoOffsetReset={{kafka.consumer.auto-offset-reset:earliest}}"
             + "&maxPollRecords={{kafka.consumer.max-poll-records:500}}"
-            + "&autoCommitEnable=false&allowManualCommit=true";
+            + "&autoCommitEnable=false&allowManualCommit=true"
+            + "&consumersCount={{kafka.consumer.consumers-count:1}}"
+            + "&maxPollIntervalMs={{kafka.consumer.max-poll-interval-ms:300000}}"
+            + "&heartbeatIntervalMs={{kafka.consumer.heartbeat-interval-ms:10000}}";
 
         RouteDefinition route = from(uri).routeId("route-rcdc-kafka-consumer");
 

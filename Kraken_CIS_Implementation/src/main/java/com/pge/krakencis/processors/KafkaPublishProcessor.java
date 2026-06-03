@@ -24,7 +24,18 @@ public class KafkaPublishProcessor {
         this.auditLogger = auditLogger;
     }
 
-    /** Sets KafkaConstants.KEY from KAFKA_KEY property and logs the send attempt. */
+    /**
+     * Sets the Kafka message key and propagates the correlation ID as a Kafka record
+     * header so downstream consumers can read it without parsing the message key.
+     *
+     * <p>Headers set on every published record:
+     * <ul>
+     *   <li>{@code CamelKafkaKey} (message key) — from {@code KAFKA_KEY} property,
+     *       or falls back to the correlation ID when not explicitly set.</li>
+     *   <li>{@code X-Correlation-ID} (record header) — always the correlation ID,
+     *       enabling trace-level correlation independent of the key.</li>
+     * </ul>
+     */
     public Processor prepare() {
         return exchange -> {
             String correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID,
@@ -32,13 +43,22 @@ public class KafkaPublishProcessor {
             String topic = exchange.getProperty(LogConstants.KAFKA_TOPIC, String.class);
             String key   = exchange.getProperty(LogConstants.KAFKA_KEY,   String.class);
 
-            if (key != null) {
-                exchange.getIn().setHeader(KafkaConstants.KEY, key);
+            // Use explicit key if set, otherwise fall back to correlationId so every
+            // message is keyed — guarantees ordered delivery per correlation ID.
+            String effectiveKey = (key != null) ? key : correlationId;
+            if (effectiveKey != null) {
+                exchange.getIn().setHeader(KafkaConstants.KEY, effectiveKey);
+            }
+
+            // Propagate correlation ID as a Kafka record header for end-to-end tracing.
+            // Downstream consumers can read this header without parsing the message body.
+            if (correlationId != null) {
+                exchange.getIn().setHeader("X-Correlation-ID", correlationId);
             }
 
             log.debug("kafkaSending", correlationId,
                 "topic", topic,
-                "key",   key != null ? key : "none");
+                "key",   effectiveKey != null ? effectiveKey : "none");
         };
     }
 

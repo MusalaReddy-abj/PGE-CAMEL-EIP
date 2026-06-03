@@ -8,6 +8,9 @@ kafka:
     compression-type: lz4
     key-serializer: org.apache.kafka.common.serialization.StringSerializer
     value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    # With acks=all and retries>0, cap in-flight requests to 5 to prevent
+    # out-of-order delivery across retries (effective idempotent delivery).
+    max-in-flight-request: 5
 
   consumer:
     group-id: kraken-cis-group
@@ -15,6 +18,13 @@ kafka:
     enable-auto-commit: false
     max-poll-records: 500
     session-timeout-ms: 30000
+    # Number of consumer threads per route per pod (Camel 4.x: consumersCount URI param).
+    # Increase to scale throughput vertically within a single JVM.
+    # Rule: consumers-count × maxPollRecords <= partition count for safe parallelism.
+    consumers-count: 2
+    # Prevent session timeout when processing large batches (max-poll-records=500)
+    max-poll-interval-ms: 300000
+    heartbeat-interval-ms: 10000
 
   topic:
     alarms:             kraken-alarm-events
@@ -24,5 +34,6 @@ kafka:
     rcdc-hes-response:  kraken-rcdc-hes-response-events
     rcdc-hes-retry:     kraken-rcdc-hes-retry-events
     rcdc-hes-dlq:       kraken-rcdc-hes-dlq-events
-    profile-reads:      kraken-profile-reads-events
-    profile-reads-dlq:  kraken-profile-reads-dlq-events
+    profile-reads:       kraken-profile-reads-events
+    profile-reads-dlq:   kraken-profile-reads-dlq-events
+    profile-reads-audit: kraken-profile-reads-audit-events

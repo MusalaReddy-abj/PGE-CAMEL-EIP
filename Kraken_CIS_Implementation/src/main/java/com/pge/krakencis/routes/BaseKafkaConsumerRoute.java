@@ -1,6 +1,7 @@
 package com.pge.krakencis.routes;
 
 import com.pge.krakencis.exceptions.ExternalServiceException;
+import com.pge.krakencis.exceptions.RetryQueueExhaustedException;
 import com.pge.krakencis.exceptions.RetryableException;
 import com.pge.krakencis.exceptions.TransformationException;
 import com.pge.krakencis.exceptions.ValidationException;
@@ -20,19 +21,26 @@ import java.util.UUID;
 /**
  * Base class for all Kafka consumer routes.
  *
- * <p>Eliminates duplication across {@code RcdcRequestKafkaListner} and
- * {@code RcdcResponseHesKafkaListner} by providing:
+ * <h3>Error handler decision tree</h3>
+ * <pre>
+ * Exception thrown
+ *   ├─ ValidationException / TransformationException  → DLQ immediately
+ *   ├─ ExternalServiceException (4xx)                 → DLQ immediately
+ *   ├─ RetryQueueExhaustedException                   → final DLQ (retry-queue limit exceeded)
+ *   ├─ RetryableException  → retry 3× (1s→2s→4s) → retry queue
+ *   └─ Exception (unknown) → retry 3× (1s→2s→4s) → retry queue
+ * </pre>
  *
- * <ul>
- *   <li>{@link #configureKafkaErrorHandlers} — wires the four {@code onException}
- *       blocks (payload error → DLQ, 4xx → DLQ, retryable → retry queue,
- *       unknown → retry queue) onto a given route definition.</li>
- *   <li>{@link #extractCorrelationId} — reads the Kafka message key as the
- *       correlation ID, generating a UUID if absent.</li>
- *   <li>{@link #commitOffset} — manually commits the Kafka consumer offset.</li>
- *   <li>{@link #setErrorProps} — prepares exchange properties before routing
- *       to {@code direct:publishToRetryQueue} or {@code direct:publishToDlq}.</li>
- * </ul>
+ * <h3>X-Error-Attempt accumulation</h3>
+ * {@link #setErrorProps} reads the existing {@code X-Error-Attempt} Kafka header
+ * from the incoming message (set by the previous pass through this route) and
+ * adds the current Camel in-process retry count. This ensures the counter
+ * accumulates correctly across retry-queue re-entries:
+ * <pre>
+ * Main consumer fails after 3 retries  → X-Error-Attempt: 3
+ * Retry consumer fails after 3 retries → X-Error-Attempt: 6
+ * Retry consumer fails after 3 retries → X-Error-Attempt: 9
+ * </pre>
  */
 public abstract class BaseKafkaConsumerRoute extends BaseRoute {
 
@@ -48,22 +56,18 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
     // ── Shared error handler configuration ───────────────────────────────────
 
     /**
-     * Wires all four Kafka consumer error handlers onto {@code route}:
+     * Wires five {@code onException} handlers onto {@code route} in priority order:
      *
      * <ol>
      *   <li>Payload errors ({@link ValidationException}, {@link TransformationException})
-     *       → DLQ immediately.</li>
+     *       → DLQ immediately — payload is permanently invalid.</li>
      *   <li>Client errors ({@link ExternalServiceException}) → DLQ immediately.</li>
-     *   <li>{@link RetryableException} (5xx / 404 / 408 / 429 / network)
-     *       → retry 3× (1 s → 2 s → 4 s) → retry queue.</li>
-     *   <li>{@link Exception} catch-all (possibly transient)
-     *       → retry 3× → retry queue.</li>
+     *   <li>{@link RetryQueueExhaustedException} → final DLQ — retry-queue limit exceeded,
+     *       no more re-attempts.</li>
+     *   <li>{@link RetryableException} (5xx / 404 / 408 / 429 / network) → retry 3×
+     *       (1 s → 2 s → 4 s) → retry queue.</li>
+     *   <li>{@link Exception} catch-all (possibly transient) → retry 3× → retry queue.</li>
      * </ol>
-     *
-     * @param route       the route definition to attach handlers to
-     * @param retryTopic  Kafka topic for transient failures after retries
-     * @param dlqTopic    Kafka topic for permanent failures
-     * @param serviceName downstream service name written to error headers
      */
     protected void configureKafkaErrorHandlers(RouteDefinition route,
                                                 String retryTopic,
@@ -79,6 +83,14 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
 
         // 4xx client error → DLQ immediately (permanent)
         route.onException(ExternalServiceException.class)
+            .handled(true)
+            .process(exchange -> setErrorProps(exchange, dlqTopic, "DLQ", serviceName))
+            .to("direct:publishToDlq")
+            .process(this::commitOffset)
+        .end();
+
+        // Retry-queue limit exceeded → final DLQ, no more re-attempts
+        route.onException(RetryQueueExhaustedException.class)
             .handled(true)
             .process(exchange -> setErrorProps(exchange, dlqTopic, "DLQ", serviceName))
             .to("direct:publishToDlq")
@@ -112,13 +124,75 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
         .end();
     }
 
+    /**
+     * Error handlers for <b>retry-queue consumers</b> — stricter than
+     * {@link #configureKafkaErrorHandlers}.
+     *
+     * <p>The key difference: the {@code Exception} catch-all routes to
+     * <b>DLQ</b> instead of back to the retry queue. A message already in the
+     * retry queue has had its transient chances; any unexpected error at this
+     * stage is treated as permanent.
+     *
+     * <p>Only {@link RetryableException} (confirmed transient: 5xx, 404, 408,
+     * 429, network) is allowed to re-enter the retry queue.
+     *
+     * <p>Invalid payloads ({@link ValidationException},
+     * {@link TransformationException}) are <b>never</b> sent to the retry queue —
+     * they go to DLQ immediately regardless of which consumer catches them.
+     */
+    protected void configureRetryQueueErrorHandlers(RouteDefinition route,
+                                                     String retryTopic,
+                                                     String dlqTopic,
+                                                     String serviceName) {
+        // Payload errors → DLQ immediately (invalid payload — never retry)
+        route.onException(ValidationException.class, TransformationException.class)
+            .handled(true)
+            .process(exchange -> setErrorProps(exchange, dlqTopic, "DLQ", serviceName))
+            .to("direct:publishToDlq")
+            .process(this::commitOffset)
+        .end();
+
+        // 4xx client error → DLQ (permanent — downstream rejected the request)
+        route.onException(ExternalServiceException.class)
+            .handled(true)
+            .process(exchange -> setErrorProps(exchange, dlqTopic, "DLQ", serviceName))
+            .to("direct:publishToDlq")
+            .process(this::commitOffset)
+        .end();
+
+        // Retry-queue limit exceeded → final DLQ
+        route.onException(RetryQueueExhaustedException.class)
+            .handled(true)
+            .process(exchange -> setErrorProps(exchange, dlqTopic, "DLQ", serviceName))
+            .to("direct:publishToDlq")
+            .process(this::commitOffset)
+        .end();
+
+        // Transient service errors → retry 3× within this pass → retry queue
+        route.onException(RetryableException.class)
+            .maximumRedeliveries(MAX_RETRIES)
+            .redeliveryDelay(1_000)
+            .backOffMultiplier(2)
+            .useExponentialBackOff()
+            .retryAttemptedLogLevel(LoggingLevel.WARN)
+            .handled(true)
+            .process(exchange -> setErrorProps(exchange, retryTopic, "RETRY", serviceName))
+            .to("direct:publishToRetryQueue")
+            .process(this::commitOffset)
+        .end();
+
+        // Any other unexpected error in retry consumer → DLQ (not retry queue)
+        // The message is already on its second chance; unknown errors are treated as permanent.
+        route.onException(Exception.class)
+            .handled(true)
+            .process(exchange -> setErrorProps(exchange, dlqTopic, "DLQ", serviceName))
+            .to("direct:publishToDlq")
+            .process(this::commitOffset)
+        .end();
+    }
+
     // ── Shared helper methods ─────────────────────────────────────────────────
 
-    /**
-     * Reads the Kafka message key as the correlation ID; generates a UUID if absent.
-     *
-     * @param logEvent structured log event name (e.g. {@code "rcdcMessageConsumed"})
-     */
     protected void extractCorrelationId(Exchange exchange, String logEvent) {
         String cid = exchange.getIn().getHeader(KafkaConstants.KEY, String.class);
         if (cid == null || cid.isBlank()) {
@@ -131,10 +205,6 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
             "offset", exchange.getIn().getHeader(KafkaConstants.OFFSET));
     }
 
-    /**
-     * Manually commits the Kafka consumer offset after message processing completes
-     * (success, retry-queue, or DLQ) to prevent infinite redelivery.
-     */
     protected void commitOffset(Exchange exchange) {
         KafkaManualCommit commit = exchange.getIn().getHeader(
             KafkaConstants.MANUAL_COMMIT, KafkaManualCommit.class);
@@ -148,14 +218,31 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
     }
 
     /**
-     * Sets exchange properties required by {@link KafkaErrorRoutes} before routing
-     * to {@code direct:publishToRetryQueue} or {@code direct:publishToDlq}.
+     * Prepares exchange properties for {@link KafkaErrorRoutes}.
+     *
+     * <p><b>Attempt accumulation:</b> reads {@code X-Error-Attempt} from the incoming
+     * Kafka record headers (written by a previous retry-queue pass) and adds the
+     * current Camel in-process redelivery count. This ensures the counter grows
+     * monotonically across retry-queue re-entries so retry-queue consumers can
+     * correctly detect when the limit is reached.
      */
     protected void setErrorProps(Exchange exchange, String topic,
                                   String destination, String serviceName) {
-        int attempt = exchange.getIn().getHeader(Exchange.REDELIVERY_COUNTER, 0, Integer.class) + 1;
+        // Previous accumulated attempt count (from X-Error-Attempt Kafka header)
+        int prevAttempt = 0;
+        String prevStr = exchange.getIn().getHeader("X-Error-Attempt", String.class);
+        if (prevStr != null) {
+            try { prevAttempt = Integer.parseInt(prevStr); } catch (NumberFormatException ignored) {}
+        }
+
+        // In-process Camel redeliveries for this pass (0 = first attempt, 3 = third retry)
+        int camelRetries = exchange.getIn().getHeader(Exchange.REDELIVERY_COUNTER, 0, Integer.class);
+
+        // Total = all previous attempts + this pass's attempts
+        int totalAttempt = prevAttempt + camelRetries + 1;
+
         exchange.setProperty(LogConstants.PROP_SERVICE_NAME,  serviceName);
-        exchange.setProperty(LogConstants.PROP_RETRY_ATTEMPT, attempt);
+        exchange.setProperty(LogConstants.PROP_RETRY_ATTEMPT, totalAttempt);
         if ("RETRY".equals(destination)) {
             exchange.setProperty(LogConstants.PROP_RETRY_TOPIC, topic);
         } else {
@@ -164,6 +251,7 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
         log.warn("kafkaMessageRouting",
             exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
             "destination", destination, "topic", topic,
-            "attempt", attempt, "serviceName", serviceName);
+            "totalAttempt", totalAttempt, "prevAttempt", prevAttempt,
+            "camelRetries", camelRetries, "serviceName", serviceName);
     }
 }

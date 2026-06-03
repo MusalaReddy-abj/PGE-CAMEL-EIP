@@ -10,6 +10,12 @@ spring:
 server:
   port: 8081
 
+# Retry-queue consumer — delay between retry-queue attempts (back-off)
+retry:
+  queue:
+    max-attempts: 3          # re-entries into retry queue before final DLQ
+    poll-delay-ms: 300000    # 5 min — slow poll IS the back-off delay
+
 # Camel Undertow REST API (main application port)
 rest:
   host: 0.0.0.0
@@ -46,17 +52,38 @@ camel:
   springboot:
     name: KrakenCISContext
     stream-caching-enabled: true
+    # Spool exchange bodies > 100 MB to disk instead of keeping them in heap.
+    # Prevents OOM when large CSV files are buffered between Camel processors.
+    stream-caching-spool-enabled: true
+    stream-caching-spool-directory: ${java.io.tmpdir}/camel-spool
+    stream-caching-spool-threshold: 104857600   # 100 MB
   main:
     auto-startup: true
 
 management:
+  # Distributed tracing (Spring Boot 3.x / Micrometer Tracing with OTel bridge).
+  # Injects traceId + spanId into MDC on every log line.
+  # Propagates W3C traceparent header on all instrumented outbound HTTP calls.
+  tracing:
+    sampling:
+      probability: 1.0     # 100% in dev/test — reduce to 0.1 in prod
+  # To export spans to Zipkin add:  management.zipkin.tracing.endpoint=http://zipkin:9411/api/v2/spans
+  # To export to Jaeger/Tempo add:  management.otlp.tracing.endpoint=http://otel-collector:4318/v1/traces
   endpoints:
     web:
       exposure:
-        include: health,info,camelroutes,camelstats
+        include: health,info,camelroutes,camelstats,prometheus,metrics
   endpoint:
     health:
       show-details: always
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+        descriptions: true
+        step: 60s
 
 logging:
   level:

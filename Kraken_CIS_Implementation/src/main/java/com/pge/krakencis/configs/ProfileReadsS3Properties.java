@@ -42,6 +42,10 @@ public class ProfileReadsS3Properties {
     private int                    delayMs            = 60_000;
     private int                    maxMessagesPerPoll = 50;
     private int                    threadPoolSize     = 4;
+    /** Maximum allowed file size in MB. Files exceeding this are rejected before parsing. */
+    private int                    maxFileSizeMb      = 100;
+    /** CSV rows per Kafka publish batch — bounds in-process memory regardless of file size. */
+    private int                    kafkaBatchSize     = 500;
 
     @Data
     public static class S3ConnectionProperties {
