@@ -2,4 +2,4 @@ kafka:
   producer:
     brokers: localhost:9092
   topic:
-    alarms: kraken-alarm-events-dev
+    alarms: kraken-alarm-events

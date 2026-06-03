@@ -8,23 +8,25 @@ spring:
 
 # Spring Boot embedded server (Actuator management endpoints only)
 server:
-  port: 8081
+  port: 8121
 
 # Camel Undertow REST API (main application port)
 rest:
   host: 0.0.0.0
-  port: 8080
+  port: 8122
 
 # External service endpoints — all outbound target URLs configured here.
 # Override per environment in config/{env}/application-{env}.yml
 external-services:
   services:
     rcdc:
-      url: http://localhost:8082/api/rcdc/command
+      # url: http://192.168.4.34:7080/api/v1/rcdcrequest
+      url: http://192.168.4.34:9000/rcdcrequest
       timeout: 30000
       content-type: application/json
     rcdc-mdm-notification:
-      url: http://localhost:8083/ws/RCDSwitchState
+      # url: http://192.168.4.34:7080/api/v1/ws/RCDSwitchState
+      url: http://192.168.4.34:9000/rcdcswitchstate
       timeout: 30000
       content-type: "text/xml; charset=utf-8"
 
@@ -49,14 +51,31 @@ camel:
   main:
     auto-startup: true
 
+# management:
+#   endpoints:
+#     web:
+#       exposure:
+#         include: health,info,camelroutes,camelstats
+#   endpoint:
+#     health:
+#       show-details: always
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,camelroutes,camelstats
+        include: health,info,camelroutes,camelstats,metrics,prometheus
+
   endpoint:
     health:
       show-details: always
+
+    prometheus:
+      enabled: true
+
+  prometheus:
+    metrics:
+      export:
+        enabled: true 
 
 logging:
   level:
@@ -67,3 +86,4 @@ logging:
     file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
   file:
     name: logs/kraken-cis.log
+
