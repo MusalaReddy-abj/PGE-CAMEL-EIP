@@ -82,7 +82,10 @@ camel:
         security-protocol: ${kafka.producer.security-protocol:PLAINTEXT}
         sasl-mechanism: ${kafka.producer.sasl-mechanism:}
         sasl-jaas-config: ${kafka.producer.sasl-jaas-config:}
-        sasl-client-callback-handler-class: ${kafka.producer.sasl-client-callback-handler-class:}
+        # saslClientCallbackHandlerClass is not a Camel KafkaConfiguration property —
+        # must use additionalProperties with the native Kafka property name.
+        additional-properties:
+          '[sasl.client.callback.handler.class]': ${kafka.producer.sasl-client-callback-handler-class:}
 
 management:
   # Distributed tracing (Spring Boot 3.x / Micrometer Tracing with OTel bridge).
