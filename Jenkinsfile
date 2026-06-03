@@ -14,6 +14,11 @@ pipeline {
         MAVEN_OPTS = '-Xmx1024m'
         IMAGE_NAME = 'pge-camel-eip'
         IMAGE_TAG  = "1.0.0-SNAPSHOT-${env.BUILD_NUMBER}"
+        AWS_REGION   = 'ap-south-2'             // your region
+        AWS_ACCOUNT  = '811159390076'            // your AWS account ID
+        ECR_REPO     = 'pge-integration-demo/pge-camel-eip"
+        ECR_URL      = "${env.AWS_ACCOUNT}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+        FULL_IMAGE   = "${env.ECR_URL}/${env.ECR_REPO}:${env.IMAGE_TAG}"
     }
 
     stages {
@@ -39,8 +44,28 @@ pipeline {
                 branch 'main'
             }
             steps {
-                sh "docker build -t ${env.IMAGE_NAME}:${env.IMAGE_TAG} ."
-                sh "docker tag ${env.IMAGE_NAME}:${env.IMAGE_TAG} ${env.IMAGE_NAME}:latest"
+                sh "docker build -t ${env.FULL_IMAGE} ."
+                sh "docker tag ${env.FULL_IMAGE} ${env.ECR_URL}/${env.ECR_REPO}:latest"
+            }
+        }
+
+        stage('ECR Push') {
+            when {
+                branch 'main'
+            }
+            steps {
+                sh "docker push ${env.FULL_IMAGE}"
+                sh "docker push ${env.ECR_URL}/${env.ECR_REPO}:latest"
+            }
+        }
+
+         stage('Docker Cleanup') {
+             when {
+                branch 'main'
+            }
+            steps {
+                sh "docker rmi ${env.FULL_IMAGE}"
+                sh "docker rmi ${env.ECR_URL}/${env.ECR_REPO}:latest"
             }
         }
 
