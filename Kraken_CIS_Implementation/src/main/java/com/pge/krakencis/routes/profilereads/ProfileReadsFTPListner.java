@@ -61,39 +61,58 @@ public class ProfileReadsFTPListner extends BaseRoute {
 
     @Override
     public void configure() {
-        // handled=false lets the exception propagate to the Camel FTP component so
-        // it can apply moveFailed and move the file to the error directory.
+        // handled=true — exception is consumed by our handler so the Camel FTP component
+        // sees the exchange as successfully completed. FTP therefore applies the `move`
+        // option (Archive directory) instead of `moveFailed` (Error directory).
+        // The handler publishes a CORRUPTED audit record before cleaning up.
         onException(Exception.class)
-            .handled(false)
-            .process(this::logFileError)
+            .handled(true)
+            .process(this::publishCorruptedFileAudit)
+            .process(exchange -> routeLoggingProcessor.cleanup(exchange))
             .end();
 
         from(ftpProperties.buildUri())
             .routeId("route-profile-reads-ftp")
             .description("Poll ProfileReads CSV files from FTP, parse each row, publish to Kafka")
-            // threadPoolSize allows multiple downloaded files to be processed concurrently.
-            // The FTP consumer still polls one file at a time; .threads() decouples
-            // downstream processing so the next poll can start while prior files are in-flight.
             .threads(ftpProperties.getThreadPoolSize())
             .process(correlationIdProcessor)
             .process(routeLoggingProcessor.entry(OPERATION))
             .process(profileReadsCsvProcessor)
             .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsTopic))
             .to("direct:publishToKafka")
-            .to("direct:publishProfileReadsDlq")        // partial-failure rows → DLQ
+            .to("direct:publishProfileReadsDlq")
             .setProperty("profileReads.source", constant("FTP"))
-            .to("direct:publishProfileReadsAudit")      // file-level audit report → audit topic
+            .to("direct:publishProfileReadsAudit")
             .process(routeLoggingProcessor.exit(OPERATION));
     }
 
-    private void logFileError(Exchange exchange) {
-        Exception ex          = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Exception.class);
-        String    fileName    = exchange.getIn().getHeader(Exchange.FILE_NAME, String.class);
+    private void publishCorruptedFileAudit(Exchange exchange) {
+        Exception ex            = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Exception.class);
+        String    fileName      = exchange.getIn().getHeader(Exchange.FILE_NAME, String.class);
         String    correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
+        int       successRows   = exchange.getProperty(LogConstants.PROP_SUCCESS_ROWS, 0, Integer.class);
 
-        log.warn("profileReadFileProcessingFailed", correlationId,
+        // Format errors (ValidationException / TransformationException) always mean CORRUPTED —
+        // the file itself is malformed regardless of how many rows were published before detection.
+        // Other exceptions mid-stream where some rows succeeded → PARTIAL_FAILURE.
+        boolean isFormatError = ex instanceof ValidationException || ex instanceof TransformationException;
+        String status = isFormatError || successRows == 0
+            ? LogConstants.FILE_STATUS_CORRUPTED
+            : LogConstants.FILE_STATUS_PARTIAL_FAILURE;
+
+        log.warn("profileReadFileFailed", correlationId,
             "fileName",  fileName,
+            "status",    status,
             "errorType", ex != null ? ex.getClass().getSimpleName() : "unknown",
-            "error",     ex != null ? ex.getMessage() : "unknown");
+            "error",     ex != null ? ex.getMessage() : "unknown",
+            "successRowsBeforeFailure", successRows);
+
+        exchange.setProperty("profileReads.source",               "FTP");
+        exchange.setProperty(LogConstants.PROP_FILE_STATUS,       status);
+        exchange.setProperty(LogConstants.PROP_FILE_ERROR_MESSAGE,
+            ex != null ? ex.getClass().getSimpleName() + ": " + ex.getMessage() : "Unknown error");
+
+        exchange.getContext().createProducerTemplate()
+            .send("direct:publishProfileReadsAudit", exchange);
     }
 }

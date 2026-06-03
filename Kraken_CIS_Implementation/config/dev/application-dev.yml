@@ -38,5 +38,3 @@ http:
       backoff-multiplier: 2.0
       max-delay-ms: 30000
       retryable-status-codes: [429, 500, 502, 503, 504]
-    dlq-topic: kraken-http-outbound-dlq
-    retry-topic: kraken-http-outbound-retry

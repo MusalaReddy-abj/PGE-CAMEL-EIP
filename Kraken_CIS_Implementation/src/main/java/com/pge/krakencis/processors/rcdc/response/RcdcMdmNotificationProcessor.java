@@ -88,6 +88,7 @@ public class RcdcMdmNotificationProcessor extends BaseProcessor {
 
             log.warn("mdmNotificationFailed", correlationId, "httpStatus", status);
 
+            // SOAP Server faults are mapped to 500 by SOAMDMNotificationService
             if (status >= 500 || status == 408 || status == 429 || status == 404) {
                 throw RetryableException.transient_(
                     SERVICE_NAME + " returned HTTP " + status, correlationId);
@@ -95,13 +96,19 @@ public class RcdcMdmNotificationProcessor extends BaseProcessor {
             throw ExternalServiceException.httpError(SERVICE_NAME, status, "", correlationId);
 
         } catch (RetryableException | ExternalServiceException | TransformationException e) {
+            // Re-throw typed exceptions as-is — no re-wrapping that could pollute the cause chain
             throw e;
         } catch (Exception e) {
             if (NetworkExceptionUtils.isNetworkException(e)) {
+                // Pass only the root network cause (ConnectException, SocketTimeoutException, etc.)
+                // NOT the full exception e — it may wrap ExternalServiceException which would cause
+                // Camel's onException(ExternalServiceException) to match and route to DLQ instead
+                // of the retry topic.
+                Throwable networkCause = NetworkExceptionUtils.rootNetworkCause(e);
                 log.warn("mdmNotificationNetworkError", correlationId,
                     "error", e.getMessage(), "exceptionType", e.getClass().getSimpleName());
                 throw RetryableException.networkError(
-                    "Network error calling " + SERVICE_NAME, correlationId, e);
+                    "Network error calling " + SERVICE_NAME, correlationId, networkCause);
             }
             throw e;
         }

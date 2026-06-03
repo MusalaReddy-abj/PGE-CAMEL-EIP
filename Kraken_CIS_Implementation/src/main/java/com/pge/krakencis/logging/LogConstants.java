@@ -48,5 +48,22 @@ public final class LogConstants {
     public static final String PROP_TOTAL_ROWS      = "profileReads.totalRows";
     public static final String PROP_SUCCESS_ROWS    = "profileReads.successRows";
 
+    // Profile Reads file-level status — set by the route on success/partial/corrupted
+    public static final String PROP_FILE_STATUS        = "profileReads.fileStatus";
+    public static final String PROP_FILE_ERROR_MESSAGE = "profileReads.fileErrorMessage";
+
+    // Profile Reads file status values
+    public static final String FILE_STATUS_SUCCESS          = "SUCCESS";
+    public static final String FILE_STATUS_PARTIAL_FAILURE  = "PARTIAL_FAILURE";
+    public static final String FILE_STATUS_CORRUPTED        = "CORRUPTED";
+
+    // OTel span/scope stored on exchange by MDCContextManager so exit() can close them
+    public static final String PROP_OTEL_SPAN       = "otel.span";
+    public static final String PROP_OTEL_SCOPE      = "otel.scope";
+
+    // MDC keys written by the Micrometer OTel bridge when a span is active
+    public static final String MDC_TRACE_ID         = "traceId";
+    public static final String MDC_SPAN_ID          = "spanId";
+
     private LogConstants() {}
 }

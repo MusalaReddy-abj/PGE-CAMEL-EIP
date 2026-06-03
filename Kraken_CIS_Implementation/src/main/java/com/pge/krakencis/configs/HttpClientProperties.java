@@ -23,18 +23,18 @@ import java.util.List;
  *       backoff-multiplier: 2.0
  *       max-delay-ms: 30000
  *       retryable-status-codes: [429, 500, 502, 503, 504]
- *     dlq-topic:   kraken-http-outbound-dlq
- *     retry-topic: kraken-http-outbound-retry
  * </pre>
+ *
+ * <p>Retry and DLQ Kafka topic names are NOT configured here. Each Kafka consumer
+ * route ({@link com.pge.krakencis.routes.BaseKafkaConsumerRoute}) passes its own
+ * flow-specific retry and DLQ topics directly via {@code @Value} injection.
  */
 @Data
 @Configuration
 @ConfigurationProperties(prefix = "http.client")
 public class HttpClientProperties {
 
-    private RetryConfig retry      = new RetryConfig();
-    private String      dlqTopic   = "kraken-http-outbound-dlq";
-    private String      retryTopic = "kraken-http-outbound-retry";
+    private RetryConfig retry = new RetryConfig();
 
     @Data
     public static class RetryConfig {
