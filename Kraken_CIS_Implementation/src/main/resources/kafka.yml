@@ -1,6 +1,6 @@
 kafka:
   producer:
-    brokers: 192.168.4.144:9092
+    brokers: b-1-public.pgeintegrationdemo.37vkb5.c2.kafka.ap-south-2.amazonaws.com:9198,b-2-public.pgeintegrationdemo.37vkb5.c2.kafka.ap-south-2.amazonaws.com:9198,b-3-public.pgeintegrationdemo.37vkb5.c2.kafka.ap-south-2.amazonaws.com:9198
     acks: all
     retries: 3
     request-timeout-ms: 30000
@@ -11,6 +11,12 @@ kafka:
     # With acks=all and retries>0, cap in-flight requests to 5 to prevent
     # out-of-order delivery across retries (effective idempotent delivery).
     max-in-flight-request: 5
+    # ── AWS MSK IAM auth (port 9198 = SASL/IAM public endpoint) ──────────────
+    # Port 9192=plaintext-public  9194=TLS-public  9196=SCRAM-public  9198=IAM-public
+    security-protocol: SASL_SSL
+    sasl-mechanism: AWS_MSK_IAM
+    sasl-jaas-config: "software.amazon.msk.auth.iam.IAMLoginModule required;"
+    sasl-client-callback-handler-class: software.amazon.msk.auth.iam.IAMClientCallbackHandler
 
   consumer:
     group-id: kraken-cis-group

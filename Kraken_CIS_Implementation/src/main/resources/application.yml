@@ -71,6 +71,17 @@ camel:
     stream-caching-spool-threshold: 104857600   # 100 MB
   main:
     auto-startup: true
+  # Global Kafka component defaults — applied to ALL Camel Kafka endpoints
+  # (both producer toD() and every consumer route URI) so security settings
+  # do not need to be repeated in each route's URI query string.
+  # Values are sourced from kafka.yml → kafka.producer.* so there is a
+  # single source of truth for broker and auth configuration.
+  component:
+    kafka:
+      security-protocol: ${kafka.producer.security-protocol:PLAINTEXT}
+      sasl-mechanism: ${kafka.producer.sasl-mechanism:}
+      sasl-jaas-config: ${kafka.producer.sasl-jaas-config:}
+      sasl-client-callback-handler-class: ${kafka.producer.sasl-client-callback-handler-class:}
 
 management:
   # Distributed tracing (Spring Boot 3.x / Micrometer Tracing with OTel bridge).
