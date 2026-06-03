@@ -60,6 +60,10 @@ http:
       max-delay-ms: 30000
       retryable-status-codes: [404, 408, 429, 500, 502, 503, 504]
 
+ftp:
+  listener:
+    enabled: false   # set true to re-enable the Profile Reads FTP poller
+
 camel:
   springboot:
     name: KrakenCISContext
