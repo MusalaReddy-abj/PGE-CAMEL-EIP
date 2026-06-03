@@ -121,17 +121,23 @@ public class HttpClientService {
         // All in-process retries exhausted — throw RetryableException so the Camel
         // Kafka consumer route routes to the flow-specific retry topic
         // (e.g. kraken-rcdc-retry-events, kraken-rcdc-hes-retry-events).
+        //
+        // IMPORTANT: do NOT pass lastError (ExternalServiceException) as the cause.
+        // Camel's onException handler traverses the full cause chain — if ExternalServiceException
+        // appears anywhere in it, onException(ExternalServiceException) matches first and
+        // routes to DLQ instead of the retry topic.
         log.error("httpOutboundRetriesExhausted", correlationId, lastError,
             "service",     request.getServiceName(),
             "url",         request.getUrl(),
-            "maxAttempts", maxAttempts);
+            "maxAttempts", maxAttempts,
+            "lastStatus",  lastError != null ? lastError.getHttpStatusCode() : null);
         throw new RetryableException(
             ErrorCode.TRANSIENT_ERROR,
             "All " + maxAttempts + " HTTP attempts failed for " + request.getServiceName()
-                + " at " + request.getUrl(),
+                + " at " + request.getUrl()
+                + (lastError != null ? " — last HTTP status: " + lastError.getHttpStatusCode() : ""),
             correlationId,
-            maxAttempts,
-            lastError);
+            maxAttempts);
     }
 
     // ── private ───────────────────────────────────────────────────────────────

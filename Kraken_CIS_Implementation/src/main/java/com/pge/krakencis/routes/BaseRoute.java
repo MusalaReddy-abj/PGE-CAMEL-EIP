@@ -1,6 +1,7 @@
 package com.pge.krakencis.routes;
 
 import com.pge.krakencis.exceptions.KrakenBaseException;
+import com.pge.krakencis.exceptions.RetryableException;
 import com.pge.krakencis.exceptions.TransformationException;
 import com.pge.krakencis.exceptions.ValidationException;
 import com.pge.krakencis.logging.RouteLoggingProcessor;
@@ -28,10 +29,15 @@ import java.util.function.Consumer;
  * Cross-cutting concerns handled automatically:
  *   ✓ ValidationException      → 400 immediately (no retry — payload fault)
  *   ✓ TransformationException  → 422 immediately (no retry — payload fault)
- *   ✓ KrakenBaseException      → 500 immediately
- *   ✓ Exception                → retry 3× (1 s / 2 s / 4 s exp backoff) → 503 with retry details
+ *   ✓ RetryableException       → retry 3× (1 s / 2 s / 4 s exp backoff) → 503
+ *   ✓ KrakenBaseException      → 500 immediately (domain error)
+ *   ✓ Exception                → retry 3× (1 s / 2 s / 4 s exp backoff) → 503
  *   ✓ Correlation ID seed/propagation
  *   ✓ Route entry / exit audit logging
+ *
+ * NOTE: RetryableException must be declared BEFORE KrakenBaseException because
+ * RetryableException extends KrakenBaseException. Without this explicit handler,
+ * Camel would match KrakenBaseException first and return HTTP 500 with no retry.
  */
 public abstract class BaseRoute extends RouteBuilder {
 
@@ -58,11 +64,23 @@ public abstract class BaseRoute extends RouteBuilder {
         route.onException(TransformationException.class)
             .handled(true).process(exceptionProcessor.transformation(operation)).end();
 
+        // Transient failures from downstream services (e.g. ODR mock down, Kafka unavailable).
+        // Must be declared BEFORE KrakenBaseException — RetryableException is a subclass and
+        // would otherwise be swallowed by the KrakenBaseException handler (HTTP 500, no retry).
+        route.onException(RetryableException.class)
+            .maximumRedeliveries(3)
+            .redeliveryDelay(1_000)
+            .backOffMultiplier(2)
+            .useExponentialBackOff()
+            .retryAttemptedLogLevel(LoggingLevel.WARN)
+            .handled(true)
+            .process(exceptionProcessor.systemWithRetryInfo(operation))
+            .end();
+
         route.onException(KrakenBaseException.class)
             .handled(true).process(exceptionProcessor.domain(operation)).end();
 
-        // Transient failures (e.g. Kafka publish unavailable): retry 3 times with exponential
-        // backoff (1 s → 2 s → 4 s) then return 503 with retry-count details.
+        // Catch-all for unexpected transient failures — same retry behaviour as RetryableException.
         route.onException(Exception.class)
             .maximumRedeliveries(3)
             .redeliveryDelay(1_000)

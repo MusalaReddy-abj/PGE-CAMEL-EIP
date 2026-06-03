@@ -37,23 +37,22 @@ public class RcdcTargetCallProcessor extends BaseProcessor {
             int statusCode = soaRcdcRequestService.sendCommand(jsonPayload, correlationId);
             exchange.getIn().setHeader(Exchange.HTTP_RESPONSE_CODE, statusCode);
             log.debug("rcdcTargetCallDelegated", correlationId, "httpStatus", statusCode);
+        } catch (RetryableException e) {
+            // HttpClientService already exhausted its in-process retries and raised a
+            // RetryableException with no ExternalServiceException in the cause chain.
+            // Re-throw as-is so Camel routes it to the retry topic.
+            throw e;
         } catch (Exception e) {
-            // Check full cause chain — Spring's RestClient wraps ConnectException inside
-            // ResourceAccessException, which HttpClientService wraps in ExternalServiceException.
-            // NetworkExceptionUtils now traverses the entire chain.
+            // Network-level failures (ConnectException, SocketTimeout, etc.)
+            // Pass the root network cause only — NOT the ExternalServiceException wrapper —
+            // so Camel's onException(ExternalServiceException) does not match the cause chain
+            // and route this to DLQ instead of the retry topic.
             if (NetworkExceptionUtils.isNetworkException(e)) {
+                Throwable networkCause = NetworkExceptionUtils.rootNetworkCause((Throwable) e);
                 log.warn("rcdcTargetNetworkError", correlationId,
                     "error", e.getMessage(), "exceptionType", e.getClass().getSimpleName());
                 throw RetryableException.networkError(
-                    "Network error calling " + SERVICE_NAME, correlationId, e);
-            }
-            // Safety net: ExternalServiceException with no HTTP status = connection-level failure
-            // (e.g. HttpClientService exhausted its internal retries on a refused connection)
-            if (e instanceof ExternalServiceException ese && ese.getHttpStatusCode() == null) {
-                log.warn("rcdcTargetConnectionFailure", correlationId,
-                    "error", e.getMessage());
-                throw RetryableException.networkError(
-                    "Connection failure calling " + SERVICE_NAME, correlationId, e);
+                    "Network error calling " + SERVICE_NAME, correlationId, networkCause);
             }
             throw e;
         }

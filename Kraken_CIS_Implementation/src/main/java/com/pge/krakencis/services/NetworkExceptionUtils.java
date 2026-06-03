@@ -52,6 +52,31 @@ public final class NetworkExceptionUtils {
         return false;
     }
 
+    /**
+     * Walks the cause chain and returns the deepest {@link Throwable} that is a
+     * recognised network-level error (ConnectException, SocketTimeoutException, etc.).
+     * Falls back to {@code e} itself if no network cause is found.
+     *
+     * <p>Use this when constructing a {@link com.pge.krakencis.exceptions.RetryableException}
+     * to avoid embedding an {@link com.pge.krakencis.exceptions.ExternalServiceException} in
+     * the cause chain — Camel's {@code onException} traverses causes, so an
+     * ExternalServiceException in the chain would match the DLQ handler instead of the
+     * retry handler.
+     */
+    public static Throwable rootNetworkCause(Throwable e) {
+        Throwable best = e;
+        Throwable current = e;
+        while (current != null) {
+            if (isTransientCause(current)) {
+                best = current;
+            }
+            Throwable next = current.getCause();
+            if (next == current) break;
+            current = next;
+        }
+        return best;
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
 
     private static boolean isTransientCause(Throwable t) {
