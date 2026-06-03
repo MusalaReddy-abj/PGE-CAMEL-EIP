@@ -24,5 +24,6 @@ ftp:
     max-messages-per-poll: 50
     thread-pool-size: 4
     idempotent: true
-    max-file-size-mb: 100     # reject files larger than this before parsing
-    kafka-batch-size: 500     # publish every N parsed rows; bounds heap usage
+    max-file-size-mb: 100        # reject files larger than this before parsing
+    kafka-batch-size: 500        # rows per async Kafka batch; bounds heap usage
+    max-concurrent-batches: 4    # max in-flight Kafka batches per file (back-pressure)

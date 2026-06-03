@@ -49,7 +49,7 @@ public class KafkaProducerConfig {
      */
     public String buildQueryString() {
         return "brokers="                  + brokers
-            + "&acks="                     + acks
+            + "&additionalProperties[acks]="                     + acks
             + "&retries="                  + retries
             + "&requestTimeoutMs="         + requestTimeoutMs
             + "&lingerMs="                 + lingerMs

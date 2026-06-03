@@ -4,6 +4,7 @@ import com.pge.krakencis.configs.HttpClientProperties;
 import com.pge.krakencis.exceptions.ErrorCode;
 import com.pge.krakencis.exceptions.ExternalServiceException;
 import com.pge.krakencis.logging.StructuredLogger;
+import com.pge.krakencis.security.JwtTokenProvider;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -51,6 +52,7 @@ public class HttpClientService {
     private final RestClient           restClient;
     private final HttpClientProperties httpClientProperties;
     private final DlqPublisher         dlqPublisher;
+    private final JwtTokenProvider     jwtTokenProvider;
 
     /**
      * @param restClientBuilder Spring Boot auto-configures this with:
@@ -61,8 +63,10 @@ public class HttpClientService {
      */
     public HttpClientService(RestClient.Builder    restClientBuilder,
                               HttpClientProperties  httpClientProperties,
-                              DlqPublisher          dlqPublisher) {
+                              DlqPublisher          dlqPublisher,
+                              JwtTokenProvider      jwtTokenProvider) {
         this.httpClientProperties = httpClientProperties;
+        this.jwtTokenProvider     = jwtTokenProvider;
         this.dlqPublisher         = dlqPublisher;
         this.restClient           = restClientBuilder.build();
     }
@@ -153,7 +157,8 @@ public class HttpClientService {
                 .method(HttpMethod.valueOf(method))
                 .uri(uri)
                 .contentType(MediaType.parseMediaType(contentType))
-                .header("X-Correlation-ID", corrHdr);
+                .header("X-Correlation-ID",  corrHdr)
+                .header("Authorization",      jwtTokenProvider.bearerHeader());
 
             request.getHeaders().forEach((k, v) -> spec.header(k, Objects.requireNonNull(v, k)));
 
