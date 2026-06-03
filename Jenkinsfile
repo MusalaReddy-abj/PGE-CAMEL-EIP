@@ -74,7 +74,10 @@ pipeline {
                 branch 'main'
             }
             steps {
-                echo 'Add deploy steps here'
+                sh """
+                    kubectl set image deployment/pge-camel-eip pge-camel-eip=${env.FULL_IMAGE} --namespace=default
+                    kubectl rollout status deployment/pge-camel-eip --namespace=default
+                """
             }
         }
     }
