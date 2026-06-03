@@ -16,6 +16,14 @@ retry:
     max-attempts: 3          # re-entries into retry queue before final DLQ
     poll-delay-ms: 300000    # 5 min — slow poll IS the back-off delay
 
+# Kong JWT — Bearer token added to all outbound HTTP calls routed through Kong.
+# Override kong.jwt.secret via environment variable KONG_JWT_SECRET in production.
+kong:
+  jwt:
+    secret: Kraken@2026!ExternalConsumer#JWT_Kong$Secure92xLpZ
+    issuer: jwt-issuer
+    expiry: 2910000000
+
 # Camel Undertow REST API (main application port)
 rest:
   host: 0.0.0.0

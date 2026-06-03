@@ -202,6 +202,55 @@ public class ProfileReadsMapper {
         return messages;
     }
 
+    /**
+     * Parallel version of {@link #toKafkaMessages} for large row sets.
+     *
+     * <p>Uses a parallel stream to group rows across multiple CPU cores.
+     * Recommended when {@code rows.size() >= 2000}.  For smaller lists the
+     * sequential version is faster due to fork/join overhead.
+     */
+    public List<KafkaProfileReadPayload> toKafkaMessagesParallel(List<ProfileReadPayload> rows,
+                                                                   String correlationId) {
+        // Parallel groupBy: "mRID|ReadingType" → list of rows
+        Map<String, List<ProfileReadPayload>> grouped =
+            rows.parallelStream().collect(
+                Collectors.groupingByConcurrent(
+                    row -> row.getMRID() + "|" + row.getReadingType()
+                )
+            );
+
+        List<KafkaProfileReadPayload> messages = grouped.values().parallelStream()
+            .map(group -> {
+                ProfileReadPayload first = group.get(0);
+
+                List<ProfileReadReading> readings = group.stream()
+                    .map(row -> ProfileReadReading.builder()
+                        .qualityType(QUALITY_TYPE)
+                        .value(parseDouble(row.getValue()))
+                        .timestamp(row.getTimeStamp())
+                        .build())
+                    .collect(Collectors.toList());
+
+                return KafkaProfileReadPayload.builder()
+                    .externalId(first.getMRID())
+                    .sourceHes(SOURCE_HES)
+                    .profileName(PROFILE_NAME)
+                    .registers(List.of(ProfileReadRegister.builder()
+                        .readingType(first.getReadingType())
+                        .uom(null).sqi(null).tou(null)
+                        .readings(readings)
+                        .build()))
+                    .build();
+            })
+            .collect(Collectors.toList());
+
+        log.debug("profileReadsGroupedParallel", correlationId,
+            "inputRows",     rows.size(),
+            "kafkaMessages", messages.size());
+
+        return messages;
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private String[] splitCsvLine(String line) {
