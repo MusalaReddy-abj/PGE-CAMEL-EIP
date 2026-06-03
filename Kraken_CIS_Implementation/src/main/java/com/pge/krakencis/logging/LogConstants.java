@@ -48,5 +48,13 @@ public final class LogConstants {
     public static final String PROP_TOTAL_ROWS      = "profileReads.totalRows";
     public static final String PROP_SUCCESS_ROWS    = "profileReads.successRows";
 
+    // OTel span/scope stored on exchange by MDCContextManager so exit() can close them
+    public static final String PROP_OTEL_SPAN       = "otel.span";
+    public static final String PROP_OTEL_SCOPE      = "otel.scope";
+
+    // MDC keys written by the Micrometer OTel bridge when a span is active
+    public static final String MDC_TRACE_ID         = "traceId";
+    public static final String MDC_SPAN_ID          = "spanId";
+
     private LogConstants() {}
 }

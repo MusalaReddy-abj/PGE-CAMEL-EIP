@@ -80,7 +80,10 @@ public class RouteLoggingProcessor {
         return exchange -> {
             Long startTime = exchange.getProperty(LogConstants.PROP_START_TIME, Long.class);
             long duration  = startTime != null ? System.currentTimeMillis() - startTime : -1;
+            // Audit log runs first so it still carries traceId/spanId in MDC
             auditLogger.logRouteEnd(exchange, operation, duration);
+            // Close OTel scope → span ends → OTel bridge removes traceId/spanId from MDC
+            mdcContextManager.endTrace(exchange);
             mdcContextManager.clearMDC();
         };
     }
