@@ -16,7 +16,7 @@ pipeline {
         IMAGE_TAG  = "1.0.0-SNAPSHOT-${env.BUILD_NUMBER}"
         AWS_REGION   = 'ap-south-2'             // your region
         AWS_ACCOUNT  = '811159390076'            // your AWS account ID
-        ECR_REPO     = 'pge-integration-demo/pge-camel-eip"
+        ECR_REPO     = 'pge-integration-demo/pge-camel-eip'
         ECR_URL      = "${env.AWS_ACCOUNT}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
         FULL_IMAGE   = "${env.ECR_URL}/${env.ECR_REPO}:${env.IMAGE_TAG}"
     }
