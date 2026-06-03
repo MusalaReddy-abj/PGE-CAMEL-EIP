@@ -65,7 +65,7 @@ public class RcdcHesRetryKafkaRoute extends BaseKafkaConsumerRoute {
             + "&maxPollRecords=50"
             + "&autoCommitEnable=false&allowManualCommit=true"
             + "&pollTimeoutMs=" + retryPollDelayMs
-            + "&concurrentConsumers={{kafka.consumer.concurrent-consumers:1}}";
+            + "&consumersCount={{kafka.consumer.consumers-count:1}}";
 
         RouteDefinition route = from(uri).routeId("route-rcdc-hes-retry-consumer");
 

@@ -91,7 +91,7 @@ public class RcdcRetryKafkaRoute extends BaseKafkaConsumerRoute {
             + "&maxPollRecords=50"                 // slow batch — retry is not urgent
             + "&autoCommitEnable=false&allowManualCommit=true"
             + "&pollTimeoutMs=" + retryPollDelayMs
-            + "&concurrentConsumers={{kafka.consumer.concurrent-consumers:1}}"; // poll every 5 min = back-off delay
+            + "&consumersCount={{kafka.consumer.consumers-count:1}}"; // poll every 5 min = back-off delay
 
         RouteDefinition route = from(uri).routeId("route-rcdc-retry-consumer");
 

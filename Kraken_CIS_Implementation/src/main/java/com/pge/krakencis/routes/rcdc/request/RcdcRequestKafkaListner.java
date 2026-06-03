@@ -63,7 +63,7 @@ public class RcdcRequestKafkaListner extends BaseKafkaConsumerRoute {
             + "&autoOffsetReset={{kafka.consumer.auto-offset-reset:earliest}}"
             + "&maxPollRecords={{kafka.consumer.max-poll-records:500}}"
             + "&autoCommitEnable=false&allowManualCommit=true"
-            + "&concurrentConsumers={{kafka.consumer.concurrent-consumers:1}}"
+            + "&consumersCount={{kafka.consumer.consumers-count:1}}"
             + "&maxPollIntervalMs={{kafka.consumer.max-poll-interval-ms:300000}}"
             + "&heartbeatIntervalMs={{kafka.consumer.heartbeat-interval-ms:10000}}";
 

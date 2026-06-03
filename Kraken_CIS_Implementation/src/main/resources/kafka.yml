@@ -18,10 +18,10 @@ kafka:
     enable-auto-commit: false
     max-poll-records: 500
     session-timeout-ms: 30000
-    # How many Kafka records each consumer thread processes in parallel per route.
+    # Number of consumer threads per route per pod (Camel 4.x: consumersCount URI param).
     # Increase to scale throughput vertically within a single JVM.
-    # Rule: concurrentConsumers × maxPollRecords <= partition count for safe parallelism.
-    concurrent-consumers: 2
+    # Rule: consumers-count × maxPollRecords <= partition count for safe parallelism.
+    consumers-count: 2
     # Prevent session timeout when processing large batches (max-poll-records=500)
     max-poll-interval-ms: 300000
     heartbeat-interval-ms: 10000
