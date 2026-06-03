@@ -3,6 +3,7 @@ package com.pge.krakencis.routes.profilereads;
 import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.models.profilereads.ProfileReadFailedRow;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.camel.builder.RouteBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -30,8 +31,16 @@ public class ProfileReadsDlqRoute extends RouteBuilder {
 
     private static final StructuredLogger log = StructuredLogger.of(ProfileReadsDlqRoute.class);
 
+    static final String METRIC_DLQ_ROWS = "kafka.dlq.rows.published";
+
     @Value("${kafka.topic.profile-reads-dlq:kraken-profile-reads-dlq-events}")
     private String profileReadsDlqTopic;
+
+    private final MeterRegistry meterRegistry;
+
+    public ProfileReadsDlqRoute(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
 
     @Override
     public void configure() {
@@ -72,10 +81,18 @@ public class ProfileReadsDlqRoute extends RouteBuilder {
                     .method("size").isGreaterThan(0))
                     .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsDlqTopic))
                     .to("direct:publishToKafka")
-                    .process(exchange -> log.warn("profileReadsDlqPublished",
-                        exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
-                        "dlqTopic",    profileReadsDlqTopic,
-                        "rowsQueued",  exchange.getIn().getBody()))
+                    .process(exchange -> {
+                        @SuppressWarnings("unchecked")
+                        List<ProfileReadFailedRow> rows =
+                            exchange.getProperty(LogConstants.PROP_FAILED_ROWS, List.class);
+                        int rowCount = rows != null ? rows.size() : 0;
+                        meterRegistry.counter(METRIC_DLQ_ROWS,
+                            "topic", profileReadsDlqTopic).increment(rowCount);
+                        log.warn("profileReadsDlqPublished",
+                            exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                            "dlqTopic",   profileReadsDlqTopic,
+                            "rowsQueued", rowCount);
+                    })
             .end()
             // Restore the body that was in place before this route was called
             .process(exchange -> {

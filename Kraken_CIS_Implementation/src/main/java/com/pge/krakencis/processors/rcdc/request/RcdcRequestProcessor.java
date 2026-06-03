@@ -6,6 +6,7 @@ import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.models.rcdc.request.RcdcRequest;
 import com.pge.krakencis.models.rcdc.request.RcdcState;
 import com.pge.krakencis.processors.BaseProcessor;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.camel.Exchange;
 import org.springframework.stereotype.Component;
 
@@ -31,6 +32,14 @@ public class RcdcRequestProcessor extends BaseProcessor {
 
     private static final StructuredLogger log = StructuredLogger.of(RcdcRequestProcessor.class);
 
+    static final String METRIC_BUSINESS_REQUESTS = "business.transaction.requests";
+
+    private final MeterRegistry meterRegistry;
+
+    public RcdcRequestProcessor(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
+
     @Override
     public void process(Exchange exchange) throws Exception {
         RcdcRequest request = exchange.getIn().getBody(RcdcRequest.class);
@@ -48,6 +57,10 @@ public class RcdcRequestProcessor extends BaseProcessor {
 
         log.info("rcdcRequestReceived", correlationId,
             "verb", request.getHeader().getVerb(), "mRID", mRID, "state", rcdcState.name());
+
+        meterRegistry.counter(METRIC_BUSINESS_REQUESTS,
+            "flow",      "RCDC",
+            "operation", rcdcState.name()).increment();
 
         exchange.setProperty("rcdc.mRID",  mRID);
         exchange.setProperty("rcdc.state", rcdcState.name());

@@ -61,12 +61,11 @@ public class ProfileReadsFTPListner extends BaseRoute {
 
     @Override
     public void configure() {
-        // handled=true — exception is consumed by our handler so the Camel FTP component
-        // sees the exchange as successfully completed. FTP therefore applies the `move`
-        // option (Archive directory) instead of `moveFailed` (Error directory).
-        // The handler publishes a CORRUPTED audit record before cleaning up.
+        // handled(false) — our handler runs (audit published) but the exception is
+        // re-propagated to the Camel FTP component. FTP then sees a failed exchange
+        // and applies the `moveFailed` option (.error directory) instead of `move` (.done).
         onException(Exception.class)
-            .handled(true)
+            .handled(false)
             .process(this::publishCorruptedFileAudit)
             .process(exchange -> routeLoggingProcessor.cleanup(exchange))
             .end();

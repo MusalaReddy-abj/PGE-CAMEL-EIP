@@ -10,11 +10,13 @@ import com.pge.krakencis.logging.RouteLoggingProcessor;
 import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.processors.CorrelationIdProcessor;
 import com.pge.krakencis.processors.RouteExceptionProcessor;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.camel.Exchange;
 import org.apache.camel.LoggingLevel;
 import org.apache.camel.component.kafka.KafkaConstants;
 import org.apache.camel.component.kafka.consumer.KafkaManualCommit;
 import org.apache.camel.model.RouteDefinition;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.UUID;
 
@@ -46,6 +48,15 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
 
     private static final StructuredLogger log         = StructuredLogger.of(BaseKafkaConsumerRoute.class);
     protected static final int            MAX_RETRIES = 3;
+
+    // ── Metric names ─────────────────────────────────────────────────────────
+    static final String METRIC_KAFKA_CONSUMED = "kafka.consumed";
+    static final String METRIC_KAFKA_DLQ      = "kafka.dlq.published";
+    static final String METRIC_KAFKA_RETRY    = "kafka.retry.published";
+
+    // Field-injected to avoid cascading constructor changes across all subclasses.
+    @Autowired
+    protected MeterRegistry meterRegistry;
 
     protected BaseKafkaConsumerRoute(CorrelationIdProcessor  correlationIdProcessor,
                                      RouteLoggingProcessor   routeLoggingProcessor,
@@ -207,9 +218,16 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
     protected void commitOffset(Exchange exchange) {
         KafkaManualCommit commit = exchange.getIn().getHeader(
             KafkaConstants.MANUAL_COMMIT, KafkaManualCommit.class);
-        String cid = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
+        String cid   = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
+        String topic = exchange.getIn().getHeader(KafkaConstants.TOPIC, String.class);
         if (commit != null) {
             commit.commit();
+            if (topic != null) {
+                meterRegistry.counter(METRIC_KAFKA_CONSUMED,
+                    "topic",   topic,
+                    "routeId", exchange.getFromRouteId() != null ? exchange.getFromRouteId() : "unknown")
+                    .increment();
+            }
             log.debug("kafkaOffsetCommitted", cid);
         } else {
             log.warn("kafkaManualCommitHeaderMissing", cid);
@@ -246,6 +264,15 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
             exchange.setProperty(LogConstants.PROP_RETRY_TOPIC, topic);
         } else {
             exchange.setProperty(LogConstants.PROP_DLQ_TOPIC, topic);
+        }
+        if ("DLQ".equals(destination)) {
+            meterRegistry.counter(METRIC_KAFKA_DLQ,
+                "topic",       topic,
+                "serviceName", serviceName).increment();
+        } else {
+            meterRegistry.counter(METRIC_KAFKA_RETRY,
+                "topic",       topic,
+                "serviceName", serviceName).increment();
         }
         log.warn("kafkaMessageRouting",
             exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
