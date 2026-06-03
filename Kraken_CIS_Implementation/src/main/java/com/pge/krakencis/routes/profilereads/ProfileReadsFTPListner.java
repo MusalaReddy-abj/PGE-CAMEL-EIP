@@ -13,6 +13,7 @@ import com.pge.krakencis.routes.BaseRoute;
 import org.apache.camel.Exchange;
 import org.apache.commons.net.ftp.FTPClient;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
@@ -44,6 +45,7 @@ import org.springframework.stereotype.Component;
  * {@code route-profile-reads-ftp}
  */
 @Component
+@ConditionalOnProperty(name = "ftp.listener.enabled", havingValue = "true")
 public class ProfileReadsFTPListner extends BaseRoute {
 
     private static final String           OPERATION = "profileReadsFtpPoll";

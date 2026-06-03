@@ -14,9 +14,11 @@ import org.apache.camel.Exchange;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 /**
  * S3 polling route that ingests Profile Reads CSV files from an AWS S3 bucket
@@ -121,10 +123,9 @@ public class ProfileReadsS3Listner extends BaseRoute {
     }
 
     /**
-     * Called from the error handler: moves the corrupted file to the Archive prefix
-     * (not the Error prefix). Mirrors {@link #moveToArchive} but tolerates null
-     * headers that might occur if the exchange was initialised before the S3
-     * consumer set its headers.
+     * Called from the error handler: moves the corrupted/failed file to the
+     * error prefix ({@code Reads/Error/}) so it is clearly separated from
+     * successfully processed files in the archive prefix.
      */
     private void moveToArchiveOnError(Exchange exchange) {
         String bucket    = exchange.getIn().getHeader(HDR_BUCKET, String.class);
@@ -137,15 +138,15 @@ public class ProfileReadsS3Listner extends BaseRoute {
             return;
         }
 
-        String fileName   = fileNameFrom(sourceKey);
-        String archiveKey = s3Properties.getArchivePrefix() + fileName;
+        String fileName  = fileNameFrom(sourceKey);
+        String errorKey  = s3Properties.getErrorPrefix() + fileName;
 
         try {
-            copyAndDelete(bucket, sourceKey, archiveKey);
-            log.info("s3CorruptedFileArchivedNotErrored", correlationId,
-                "bucket", bucket, "sourceKey", sourceKey, "archiveKey", archiveKey);
+            copyAndDelete(bucket, sourceKey, errorKey);
+            log.info("s3CorruptedFileMovedToError", correlationId,
+                "bucket", bucket, "sourceKey", sourceKey, "errorKey", errorKey);
         } catch (Exception e) {
-            log.error("s3CorruptedFileMoveToArchiveFailed", correlationId, e,
+            log.error("s3CorruptedFileMoveToErrorFailed", correlationId, e,
                 "bucket", bucket, "sourceKey", sourceKey);
         }
     }
@@ -194,6 +195,26 @@ public class ProfileReadsS3Listner extends BaseRoute {
         s3Client.deleteObject(DeleteObjectRequest.builder()
             .bucket(bucket).key(sourceKey)
             .build());
+
+        // Recreate the source prefix as a zero-byte placeholder so the
+        // Reads/profilereads/ "folder" remains visible in the S3 console
+        // after the processed file is moved out.
+        recreateSourceFolder(bucket);
+    }
+
+    private void recreateSourceFolder(String bucket) {
+        String placeholderKey = s3Properties.getSourcePrefix() + ".keep";
+        try {
+            s3Client.putObject(
+                PutObjectRequest.builder()
+                    .bucket(bucket)
+                    .key(placeholderKey)
+                    .build(),
+                RequestBody.empty());
+        } catch (Exception e) {
+            log.warn("s3SourceFolderRecreateFailed", null,
+                "bucket", bucket, "key", placeholderKey, "error", e.getMessage());
+        }
     }
 
     private static String fileNameFrom(String s3Key) {
