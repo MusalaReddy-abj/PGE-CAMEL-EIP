@@ -52,7 +52,7 @@ public class KafkaRoute extends RouteBuilder {
                     Exception ex = exchange.getException();
                     log.error("kafkaPublishFailed", correlationId, ex,
                         "topic", topic,
-                        "error", ex.getMessage());
+                        "error", ex != null ? ex.getMessage() : "unknown");
                 })
                 .setBody(constant(0))
             .end()

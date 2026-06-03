@@ -78,7 +78,10 @@ public class KafkaProducerConfig {
                 q.append("&saslJaasConfig=")                 .append(saslJaasConfig);
             }
             if (!saslClientCallbackHandlerClass.isBlank()) {
-                q.append("&saslClientCallbackHandlerClass=") .append(saslClientCallbackHandlerClass);
+                // saslClientCallbackHandlerClass is not a valid Camel Kafka URI param —
+                // must be passed via additionalProperties using the native Kafka property name.
+                q.append("&additionalProperties[sasl.client.callback.handler.class]=")
+                 .append(saslClientCallbackHandlerClass);
             }
         }
         return q.toString();
