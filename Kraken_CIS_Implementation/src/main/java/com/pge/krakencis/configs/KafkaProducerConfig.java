@@ -42,21 +42,46 @@ public class KafkaProducerConfig {
      */
     private int    maxInFlightRequest = 5;
 
+    // ── Security (optional — only appended when securityProtocol is not PLAINTEXT) ──
+    /** e.g. {@code SASL_SSL} for MSK IAM/SCRAM, {@code PLAINTEXT} for local dev. */
+    private String securityProtocol              = "PLAINTEXT";
+    /** e.g. {@code AWS_MSK_IAM} or {@code SCRAM-SHA-512}. */
+    private String saslMechanism                 = "";
+    /** Full JAAS config line, e.g. {@code software.amazon.msk.auth.iam.IAMLoginModule required;}. */
+    private String saslJaasConfig                = "";
+    /** Callback handler class, e.g. {@code software.amazon.msk.auth.iam.IAMClientCallbackHandler}. */
+    private String saslClientCallbackHandlerClass = "";
+
     /**
      * Query-string-only parameters (no topic prefix).
      * Used with Camel's .toD() for dynamic topic resolution at runtime:
      *   .toD("kafka:${exchangeProperty.kafkaTopic}?" + buildQueryString())
      */
     public String buildQueryString() {
-        return "brokers="                  + brokers
-            + "&additionalProperties[acks]="                     + acks
-            + "&retries="                  + retries
-            + "&requestTimeoutMs="         + requestTimeoutMs
-            + "&lingerMs="                 + lingerMs
-            + "&compressionCodec="         + compressionType
-            + "&keySerializer="            + keySerializer
-            + "&valueSerializer="          + valueSerializer
-            + "&maxInFlightRequest="       + maxInFlightRequest;
+        StringBuilder q = new StringBuilder()
+            .append("brokers=")                        .append(brokers)
+            .append("&additionalProperties[acks]=")    .append(acks)
+            .append("&retries=")                       .append(retries)
+            .append("&requestTimeoutMs=")              .append(requestTimeoutMs)
+            .append("&lingerMs=")                      .append(lingerMs)
+            .append("&compressionCodec=")              .append(compressionType)
+            .append("&keySerializer=")                 .append(keySerializer)
+            .append("&valueSerializer=")               .append(valueSerializer)
+            .append("&maxInFlightRequest=")            .append(maxInFlightRequest);
+
+        if (!"PLAINTEXT".equalsIgnoreCase(securityProtocol)) {
+            q.append("&securityProtocol=")                   .append(securityProtocol);
+            if (!saslMechanism.isBlank()) {
+                q.append("&saslMechanism=")                  .append(saslMechanism);
+            }
+            if (!saslJaasConfig.isBlank()) {
+                q.append("&saslJaasConfig=")                 .append(saslJaasConfig);
+            }
+            if (!saslClientCallbackHandlerClass.isBlank()) {
+                q.append("&saslClientCallbackHandlerClass=") .append(saslClientCallbackHandlerClass);
+            }
+        }
+        return q.toString();
     }
 
     /**

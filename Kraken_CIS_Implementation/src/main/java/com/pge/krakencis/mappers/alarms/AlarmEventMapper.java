@@ -10,15 +10,15 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Component
 public class AlarmEventMapper {
 
-    private static final StructuredLogger  log              = StructuredLogger.of(AlarmEventMapper.class);
-    private static final String            HES_CODE         = "TRILLIANT";
-    private static final String            MESSAGE_ID_PREFIX = "Alarms_";
-    private static final DateTimeFormatter DATE_ONLY        = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final StructuredLogger  log      = StructuredLogger.of(AlarmEventMapper.class);
+    private static final String            HES_CODE = "TRILLIANT";
+    private static final DateTimeFormatter DATE_ONLY = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     public List<KrakenEvent> toKrakenEvents(List<AlarmEvent> events, String correlationId) {
         log.debug("mappingAlarmEvents", correlationId, "inputCount", events.size());
@@ -31,7 +31,7 @@ public class AlarmEventMapper {
 
     public KrakenEvent toKrakenEvent(AlarmEvent event, String correlationId) {
         KrakenEvent krakenEvent = KrakenEvent.builder()
-            .messageId(MESSAGE_ID_PREFIX + event.getDeviceIdentifierNumber())
+            .messageId(UUID.randomUUID().toString())
             .hesCode(HES_CODE)
             .extEventName(event.getCategory())
             .externalId(event.getDeviceIdentifierNumber())

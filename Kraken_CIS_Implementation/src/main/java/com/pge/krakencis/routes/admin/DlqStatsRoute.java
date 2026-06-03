@@ -1,6 +1,8 @@
 package com.pge.krakencis.routes.admin;
 
 import com.pge.krakencis.logging.StructuredLogger;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
 import org.apache.camel.Exchange;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.model.rest.RestBindingMode;
@@ -14,6 +16,7 @@ import org.apache.kafka.common.TopicPartitionInfo;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import jakarta.annotation.PostConstruct;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -22,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Camel REST route that exposes a read-only DLQ visibility endpoint.
@@ -52,6 +56,7 @@ public class DlqStatsRoute extends RouteBuilder {
     private static final StructuredLogger log            = StructuredLogger.of(DlqStatsRoute.class);
     private static final String           CONSUMER_GROUP = "kraken-dlq-monitor";
     private static final int              TIMEOUT_S      = 10;
+    static final String                   METRIC_DLQ_LAG = "kafka.dlq.lag";
 
     @Value("${kafka.producer.brokers:localhost:9092}")
     private String bootstrapServers;
@@ -64,6 +69,30 @@ public class DlqStatsRoute extends RouteBuilder {
 
     @Value("${kafka.topic.profile-reads-dlq:kraken-profile-reads-dlq-events}")
     private String profileReadsDlqTopic;
+
+    private final MeterRegistry meterRegistry;
+
+    // AtomicLong per DLQ topic — updated after every /stats call, read by Prometheus scrapes.
+    private final AtomicLong rcdcDlqLag        = new AtomicLong(0);
+    private final AtomicLong rcdcHesDlqLag     = new AtomicLong(0);
+    private final AtomicLong profileReadsDlqLag = new AtomicLong(0);
+
+    public DlqStatsRoute(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
+
+    @PostConstruct
+    public void registerGauges() {
+        meterRegistry.gauge(METRIC_DLQ_LAG,
+            Tags.of("topic", rcdcDlqTopic.isEmpty() ? "kraken-rcdc-dlq-events" : rcdcDlqTopic),
+            rcdcDlqLag, AtomicLong::get);
+        meterRegistry.gauge(METRIC_DLQ_LAG,
+            Tags.of("topic", rcdcHesDlqTopic.isEmpty() ? "kraken-rcdc-hes-dlq-events" : rcdcHesDlqTopic),
+            rcdcHesDlqLag, AtomicLong::get);
+        meterRegistry.gauge(METRIC_DLQ_LAG,
+            Tags.of("topic", profileReadsDlqTopic.isEmpty() ? "kraken-profile-reads-dlq-events" : profileReadsDlqTopic),
+            profileReadsDlqLag, AtomicLong::get);
+    }
 
     @Override
     public void configure() {
@@ -130,7 +159,7 @@ public class DlqStatsRoute extends RouteBuilder {
         Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> committed =
             cgResult.partitionsToOffsetAndMetadata().get(TIMEOUT_S, TimeUnit.SECONDS);
 
-        // ── 3. Sum lag per topic ──────────────────────────────────────────────
+        // ── 3. Sum lag per topic and update Prometheus gauges ────────────────
         List<Map<String, Object>> results = new ArrayList<>();
         for (String topic : topics) {
             long lag = 0L;
@@ -142,6 +171,7 @@ public class DlqStatsRoute extends RouteBuilder {
                     ? committed.get(e.getKey()).offset() : 0L;
                 lag += Math.max(0L, end - cmt);
             }
+            updateLagGauge(topic, lag);
             results.add(Map.of("topic", topic, "consumerGroup", CONSUMER_GROUP, "lag", lag));
         }
         return results;
@@ -159,6 +189,12 @@ public class DlqStatsRoute extends RouteBuilder {
         }
         sb.append("  ],\n  \"checkedAt\": \"").append(esc(checkedAt)).append("\"\n}");
         return sb.toString();
+    }
+
+    private void updateLagGauge(String topic, long lag) {
+        if (topic.equals(rcdcDlqTopic))         rcdcDlqLag.set(lag);
+        else if (topic.equals(rcdcHesDlqTopic)) rcdcHesDlqLag.set(lag);
+        else if (topic.equals(profileReadsDlqTopic)) profileReadsDlqLag.set(lag);
     }
 
     private static String esc(String v) {

@@ -3,6 +3,7 @@ package com.pge.krakencis.processors;
 import com.pge.krakencis.logging.AuditLogger;
 import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.StructuredLogger;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.camel.Processor;
 import org.apache.camel.component.kafka.KafkaConstants;
 import org.springframework.stereotype.Component;
@@ -18,10 +19,15 @@ public class KafkaPublishProcessor {
 
     private static final StructuredLogger log = StructuredLogger.of(KafkaPublishProcessor.class);
 
-    private final AuditLogger auditLogger;
+    static final String METRIC_KAFKA_PUBLISH_ATTEMPTED = "kafka.publish.attempted";
+    static final String METRIC_KAFKA_PUBLISH_SUCCESS   = "kafka.publish.success";
 
-    public KafkaPublishProcessor(AuditLogger auditLogger) {
-        this.auditLogger = auditLogger;
+    private final AuditLogger    auditLogger;
+    private final MeterRegistry  meterRegistry;
+
+    public KafkaPublishProcessor(AuditLogger auditLogger, MeterRegistry meterRegistry) {
+        this.auditLogger   = auditLogger;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -56,6 +62,9 @@ public class KafkaPublishProcessor {
                 exchange.getIn().setHeader("X-Correlation-ID", correlationId);
             }
 
+            if (topic != null) {
+                meterRegistry.counter(METRIC_KAFKA_PUBLISH_ATTEMPTED, "topic", topic).increment();
+            }
             log.debug("kafkaSending", correlationId,
                 "topic", topic,
                 "key",   effectiveKey != null ? effectiveKey : "none");
@@ -70,6 +79,9 @@ public class KafkaPublishProcessor {
             String topic = exchange.getProperty(LogConstants.KAFKA_TOPIC, String.class);
             String key   = exchange.getIn().getHeader(KafkaConstants.KEY, String.class);
 
+            if (topic != null) {
+                meterRegistry.counter(METRIC_KAFKA_PUBLISH_SUCCESS, "topic", topic).increment();
+            }
             auditLogger.logKafkaPublish(correlationId, topic, key, true);
         };
     }

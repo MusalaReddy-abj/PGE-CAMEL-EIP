@@ -69,7 +69,7 @@ public class ProfileReadsMapper {
     };
 
     // ── Hardcoded constants for the Kafka payload ─────────────────────────────
-    private static final String SOURCE_HES    = "SENSUS";
+    private static final String SOURCE_HES    = "TRILLIANT";
     private static final String PROFILE_NAME  = "INTERVAL_READS";
     private static final String QUALITY_TYPE  = "1.0.0";
 

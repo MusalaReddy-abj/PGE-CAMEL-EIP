@@ -67,6 +67,13 @@
             <artifactId>camel-kafka-starter</artifactId>
         </dependency>
 
+        <!-- AWS MSK IAM authentication (SASL/IAM for MSK public endpoints on port 9198) -->
+        <dependency>
+            <groupId>software.amazon.msk</groupId>
+            <artifactId>aws-msk-iam-auth</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+
         <!-- Camel OpenAPI (Swagger docs via /api-doc) -->
         <dependency>
             <groupId>org.apache.camel.springboot</groupId>

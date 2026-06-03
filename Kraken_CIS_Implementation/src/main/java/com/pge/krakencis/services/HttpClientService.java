@@ -6,6 +6,7 @@ import com.pge.krakencis.exceptions.ExternalServiceException;
 import com.pge.krakencis.exceptions.RetryableException;
 import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.security.JwtTokenProvider;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +18,7 @@ import org.springframework.web.client.RestClient.RequestBodySpec;
 import java.net.URI;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Common HTTP sender for all outbound calls (REST JSON and SOAP XML).
@@ -50,9 +52,16 @@ public class HttpClientService {
 
     private static final StructuredLogger log = StructuredLogger.of(HttpClientService.class);
 
+    // ── Metric names ──────────────────────────────────────────────────────────
+    static final String METRIC_HTTP_REQUESTS  = "http.outbound.requests";
+    static final String METRIC_HTTP_DURATION  = "http.outbound.duration";
+    static final String METRIC_HTTP_RETRIES   = "http.outbound.retries";
+    static final String METRIC_HTTP_EXHAUSTED = "http.outbound.exhausted";
+
     private final RestClient           restClient;
     private final HttpClientProperties httpClientProperties;
     private final JwtTokenProvider     jwtTokenProvider;
+    private final MeterRegistry        meterRegistry;
 
     /**
      * @param restClientBuilder Spring Boot auto-configures this with:
@@ -63,9 +72,11 @@ public class HttpClientService {
      */
     public HttpClientService(RestClient.Builder    restClientBuilder,
                               HttpClientProperties  httpClientProperties,
-                              JwtTokenProvider      jwtTokenProvider) {
+                              JwtTokenProvider      jwtTokenProvider,
+                              MeterRegistry         meterRegistry) {
         this.httpClientProperties = httpClientProperties;
         this.jwtTokenProvider     = jwtTokenProvider;
+        this.meterRegistry        = meterRegistry;
         this.restClient           = restClientBuilder.build();
     }
 
@@ -105,6 +116,8 @@ public class HttpClientService {
                 }
 
                 if (attempt < maxAttempts) {
+                    meterRegistry.counter(METRIC_HTTP_RETRIES,
+                        "service", request.getServiceName()).increment();
                     log.warn("httpOutboundRetrying", correlationId,
                         "service",     request.getServiceName(),
                         "url",         request.getUrl(),
@@ -126,6 +139,8 @@ public class HttpClientService {
         // Camel's onException handler traverses the full cause chain — if ExternalServiceException
         // appears anywhere in it, onException(ExternalServiceException) matches first and
         // routes to DLQ instead of the retry topic.
+        meterRegistry.counter(METRIC_HTTP_EXHAUSTED,
+            "service", request.getServiceName()).increment();
         log.error("httpOutboundRetriesExhausted", correlationId, lastError,
             "service",     request.getServiceName(),
             "url",         request.getUrl(),
@@ -189,6 +204,15 @@ public class HttpClientService {
             long duration = System.currentTimeMillis() - startTime;
             int  status   = response.getStatusCode().value();
 
+            meterRegistry.counter(METRIC_HTTP_REQUESTS,
+                "service",  request.getServiceName(),
+                "httpStatus", String.valueOf(status),
+                "outcome",  "success").increment();
+            meterRegistry.timer(METRIC_HTTP_DURATION,
+                "service", request.getServiceName(),
+                "outcome", "success")
+                .record(duration, TimeUnit.MILLISECONDS);
+
             log.info("httpOutboundCompleted", correlationId,
                 "service",    request.getServiceName(),
                 "url",        url,
@@ -204,6 +228,14 @@ public class HttpClientService {
 
         } catch (ExternalServiceException e) {
             long duration = System.currentTimeMillis() - startTime;
+            meterRegistry.counter(METRIC_HTTP_REQUESTS,
+                "service",    request.getServiceName(),
+                "httpStatus", String.valueOf(e.getHttpStatusCode()),
+                "outcome",    "failure").increment();
+            meterRegistry.timer(METRIC_HTTP_DURATION,
+                "service", request.getServiceName(),
+                "outcome", "failure")
+                .record(duration, TimeUnit.MILLISECONDS);
             log.warn("httpOutboundAttemptFailed", correlationId,
                 "service",    request.getServiceName(),
                 "url",        request.getUrl(),
@@ -215,6 +247,14 @@ public class HttpClientService {
 
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - startTime;
+            meterRegistry.counter(METRIC_HTTP_REQUESTS,
+                "service",    request.getServiceName(),
+                "httpStatus", "0",
+                "outcome",    "failure").increment();
+            meterRegistry.timer(METRIC_HTTP_DURATION,
+                "service", request.getServiceName(),
+                "outcome", "failure")
+                .record(duration, TimeUnit.MILLISECONDS);
             log.warn("httpOutboundConnectionFailed", correlationId, e,
                 "service",    request.getServiceName(),
                 "url",        request.getUrl(),
