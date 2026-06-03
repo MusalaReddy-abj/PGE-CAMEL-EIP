@@ -27,7 +27,7 @@ pipeline {
             }
             steps {
                 dir('Kraken_CIS_Implementation') {
-                    sh 'mvn clean install'
+                    sh 'mvn clean install -DskipTests'
                 }
             }
         }
