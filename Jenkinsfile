@@ -26,7 +26,7 @@ pipeline {
                 branch 'main'
             }
             steps {
-                dir('your-subdir') {
+                dir('Kraken_CIS_Implementation') {
                     sh 'mvn clean install'
                 }
             }
