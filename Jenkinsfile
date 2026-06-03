@@ -12,6 +12,8 @@ pipeline {
 
     environment {
         MAVEN_OPTS = '-Xmx1024m'
+        IMAGE_NAME = 'pge-camel-eip'
+        IMAGE_TAG  = "1.0.0-SNAPSHOT-${env.BUILD_NUMBER}"
     }
 
     stages {
@@ -29,6 +31,16 @@ pipeline {
                 dir('Kraken_CIS_Implementation') {
                     sh 'mvn clean install -DskipTests'
                 }
+            }
+        }
+
+        stage('Docker Build') {
+             when {
+                branch 'main'
+            }
+            steps {
+                sh "docker build -t ${env.IMAGE_NAME}:${env.IMAGE_TAG} ."
+                sh "docker tag ${env.IMAGE_NAME}:${env.IMAGE_TAG} ${env.IMAGE_NAME}:latest"
             }
         }
 
