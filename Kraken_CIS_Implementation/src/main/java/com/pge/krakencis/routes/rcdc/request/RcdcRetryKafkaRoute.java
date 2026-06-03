@@ -83,15 +83,20 @@ public class RcdcRetryKafkaRoute extends BaseKafkaConsumerRoute {
 
     @Override
     public void configure() {
+        // maxPollIntervalMs must exceed retryPollDelayMs (5 min) so Kafka does not
+        // consider the consumer dead while the route delay() is sleeping.
+        // Set to 2× the delay + 60s buffer = 660000 ms (11 min).
+        long maxPollIntervalMs = retryPollDelayMs * 2L + 60_000L;
+
         final String uri =
             "kafka:{{kafka.topic.rcdc-retry:kraken-rcdc-retry-events}}"
             + "?brokers={{kafka.producer.brokers}}"
             + "&groupId={{kafka.consumer.group-id:kraken-cis-group}}-retry"
             + "&autoOffsetReset={{kafka.consumer.auto-offset-reset:earliest}}"
-            + "&maxPollRecords=50"                 // slow batch — retry is not urgent
+            + "&maxPollRecords=50"
             + "&autoCommitEnable=false&allowManualCommit=true"
-            + "&pollTimeoutMs=" + retryPollDelayMs
-            + "&consumersCount={{kafka.consumer.consumers-count:1}}"; // poll every 5 min = back-off delay
+            + "&maxPollIntervalMs=" + maxPollIntervalMs
+            + "&consumersCount={{kafka.consumer.consumers-count:1}}";
 
         RouteDefinition route = from(uri).routeId("route-rcdc-retry-consumer");
 
@@ -104,6 +109,10 @@ public class RcdcRetryKafkaRoute extends BaseKafkaConsumerRoute {
                 LogConstants.PROP_ORIGINAL_BODY, exchange.getIn().getBody(String.class)))
             .process(this::extractCorrelationIdFromRetry)
             .process(routeLoggingProcessor.entry(OPERATION))
+            // 5-minute back-off before retrying the downstream call.
+            // maxPollIntervalMs in the URI is set to 2× this value so Kafka does not
+            // rebalance the consumer group while this thread is sleeping.
+            .delay(retryPollDelayMs)
 
             // Check if this message has exceeded retry-queue attempt limit
             .process(exchange -> {
@@ -144,8 +153,7 @@ public class RcdcRetryKafkaRoute extends BaseKafkaConsumerRoute {
     }
 
     private int parseAttempt(Exchange exchange) {
-        String raw = exchange.getIn().getHeader("X-Error-Attempt", "0", String.class);
-        try { return Integer.parseInt(raw); } catch (NumberFormatException e) { return 0; }
+        return parseKafkaHeaderAsInt(exchange, "X-Error-Attempt", 0);
     }
 
 }

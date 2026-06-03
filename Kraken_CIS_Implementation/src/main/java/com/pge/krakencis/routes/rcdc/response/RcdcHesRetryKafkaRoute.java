@@ -57,6 +57,8 @@ public class RcdcHesRetryKafkaRoute extends BaseKafkaConsumerRoute {
 
     @Override
     public void configure() {
+        long maxPollIntervalMs = retryPollDelayMs * 2L + 60_000L;
+
         final String uri =
             "kafka:{{kafka.topic.rcdc-hes-retry:kraken-rcdc-hes-retry-events}}"
             + "?brokers={{kafka.producer.brokers}}"
@@ -64,7 +66,7 @@ public class RcdcHesRetryKafkaRoute extends BaseKafkaConsumerRoute {
             + "&autoOffsetReset={{kafka.consumer.auto-offset-reset:earliest}}"
             + "&maxPollRecords=50"
             + "&autoCommitEnable=false&allowManualCommit=true"
-            + "&pollTimeoutMs=" + retryPollDelayMs
+            + "&maxPollIntervalMs=" + maxPollIntervalMs
             + "&consumersCount={{kafka.consumer.consumers-count:1}}";
 
         RouteDefinition route = from(uri).routeId("route-rcdc-hes-retry-consumer");

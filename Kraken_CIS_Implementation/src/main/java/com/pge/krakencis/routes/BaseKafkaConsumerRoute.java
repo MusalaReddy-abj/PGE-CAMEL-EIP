@@ -220,26 +220,26 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
     /**
      * Prepares exchange properties for {@link KafkaErrorRoutes}.
      *
-     * <p><b>Attempt accumulation:</b> reads {@code X-Error-Attempt} from the incoming
-     * Kafka record headers (written by a previous retry-queue pass) and adds the
-     * current Camel in-process redelivery count. This ensures the counter grows
-     * monotonically across retry-queue re-entries so retry-queue consumers can
-     * correctly detect when the limit is reached.
+     * <p><b>Attempt counting:</b> reads {@code X-Error-Attempt} from the incoming
+     * Kafka record header (written by a previous retry-queue pass) and increments
+     * it by 1. This counts <em>retry-queue entries</em>, not in-process Camel
+     * redeliveries. The retry-queue consumer checks this value against
+     * {@code retry.queue.max-attempts} to decide when to send to DLQ.
+     *
+     * <p>Example with {@code max-attempts=3}:
+     * <pre>
+     * Main consumer fails (3 in-process retries) → X-Error-Attempt = 1 → retry topic
+     * Retry pass 1 fails                          → X-Error-Attempt = 2 → retry topic
+     * Retry pass 2 fails                          → X-Error-Attempt = 3 → retry topic
+     * Retry pass 3: attempt(3) >= max(3)          → RetryQueueExhaustedException → DLQ
+     * </pre>
      */
     protected void setErrorProps(Exchange exchange, String topic,
                                   String destination, String serviceName) {
-        // Previous accumulated attempt count (from X-Error-Attempt Kafka header)
-        int prevAttempt = 0;
-        String prevStr = exchange.getIn().getHeader("X-Error-Attempt", String.class);
-        if (prevStr != null) {
-            try { prevAttempt = Integer.parseInt(prevStr); } catch (NumberFormatException ignored) {}
-        }
-
-        // In-process Camel redeliveries for this pass (0 = first attempt, 3 = third retry)
-        int camelRetries = exchange.getIn().getHeader(Exchange.REDELIVERY_COUNTER, 0, Integer.class);
-
-        // Total = all previous attempts + this pass's attempts
-        int totalAttempt = prevAttempt + camelRetries + 1;
+        // Count only retry-queue entries. Read the previous entry count from the
+        // Kafka record header; increment by 1 for this new entry.
+        int prevAttempt = parseKafkaHeaderAsInt(exchange, "X-Error-Attempt", 0);
+        int totalAttempt = prevAttempt + 1;
 
         exchange.setProperty(LogConstants.PROP_SERVICE_NAME,  serviceName);
         exchange.setProperty(LogConstants.PROP_RETRY_ATTEMPT, totalAttempt);
@@ -250,8 +250,30 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
         }
         log.warn("kafkaMessageRouting",
             exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
-            "destination", destination, "topic", topic,
-            "totalAttempt", totalAttempt, "prevAttempt", prevAttempt,
-            "camelRetries", camelRetries, "serviceName", serviceName);
+            "destination",   destination,
+            "topic",         topic,
+            "queueEntry",    totalAttempt,
+            "prevEntry",     prevAttempt,
+            "serviceName",   serviceName);
+    }
+
+    /**
+     * Reads a Kafka record header as an int, handling both {@code String} and
+     * {@code byte[]} types. Kafka record headers are byte arrays on the wire;
+     * Camel may deliver them as {@code byte[]} depending on the version and
+     * configuration. Falling back to {@code byte[]} parsing prevents the attempt
+     * counter from silently resetting to 0 and causing infinite retries.
+     */
+    protected int parseKafkaHeaderAsInt(Exchange exchange, String headerName, int defaultValue) {
+        Object raw = exchange.getIn().getHeader(headerName);
+        if (raw == null) return defaultValue;
+        if (raw instanceof String s) {
+            try { return Integer.parseInt(s.trim()); } catch (NumberFormatException ignored) {}
+        }
+        if (raw instanceof byte[] bytes) {
+            try { return Integer.parseInt(new String(bytes, java.nio.charset.StandardCharsets.UTF_8).trim()); }
+            catch (Exception ignored) {}
+        }
+        return defaultValue;
     }
 }

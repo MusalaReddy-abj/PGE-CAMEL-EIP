@@ -79,12 +79,20 @@ public class ProfileReadsAuditRoute extends RouteBuilder {
         String fileName      = exchange.getIn().getHeader(Exchange.FILE_NAME, String.class);
         int    totalRows     = exchange.getProperty(LogConstants.PROP_TOTAL_ROWS,   0, Integer.class);
         int    successRows   = exchange.getProperty(LogConstants.PROP_SUCCESS_ROWS, 0, Integer.class);
-        String source        = exchange.getProperty("profileReads.source", "UNKNOWN", String.class);
+        String source        = exchange.getProperty("profileReads.source",             "UNKNOWN", String.class);
+        String explicitStatus = exchange.getProperty(LogConstants.PROP_FILE_STATUS,    String.class);
+        String errorMessage  = exchange.getProperty(LogConstants.PROP_FILE_ERROR_MESSAGE, String.class);
 
         @SuppressWarnings("unchecked")
         List<ProfileReadFailedRow> failedRows =
             exchange.getProperty(LogConstants.PROP_FAILED_ROWS, List.class);
-        int failureCount = (failedRows != null) ? failedRows.size() : (totalRows - successRows);
+        int failureCount = (failedRows != null) ? failedRows.size() : Math.max(0, totalRows - successRows);
+
+        // Resolve status: explicit value (set by error handler) takes priority,
+        // otherwise infer from processing counts.
+        String status = explicitStatus != null ? explicitStatus
+            : (failureCount > 0 ? LogConstants.FILE_STATUS_PARTIAL_FAILURE
+                                : LogConstants.FILE_STATUS_SUCCESS);
 
         ProfileReadsAuditReport report = ProfileReadsAuditReport.builder()
             .fileName(fileName)
@@ -94,9 +102,10 @@ public class ProfileReadsAuditRoute extends RouteBuilder {
             .correlationId(correlationId)
             .processedAt(OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))
             .source(source)
+            .status(status)
+            .errorMessage(errorMessage)
             .build();
 
-        // Set correlation ID as Kafka message key
         exchange.setProperty(LogConstants.KAFKA_KEY, correlationId);
         exchange.getIn().setHeader(KafkaConstants.KEY, correlationId);
         exchange.getIn().setBody(report);

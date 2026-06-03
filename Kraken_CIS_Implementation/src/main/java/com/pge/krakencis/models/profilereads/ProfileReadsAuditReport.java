@@ -51,4 +51,13 @@ public class ProfileReadsAuditReport {
 
     /** Transport source: {@code FTP} or {@code S3}. */
     private String source;
+
+    /**
+     * Processing outcome: {@code SUCCESS}, {@code PARTIAL_FAILURE}, or {@code CORRUPTED}.
+     * {@code CORRUPTED} means the file could not be parsed at all (exception during processing).
+     */
+    private String status;
+
+    /** Exception message when {@code status} is {@code CORRUPTED}. Null on success. */
+    private String errorMessage;
 }

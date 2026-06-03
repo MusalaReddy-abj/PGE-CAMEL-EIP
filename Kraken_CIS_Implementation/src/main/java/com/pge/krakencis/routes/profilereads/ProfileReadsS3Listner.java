@@ -77,12 +77,14 @@ public class ProfileReadsS3Listner extends BaseRoute {
 
     @Override
     public void configure() {
-        // handled=false — exception propagates so Camel marks the exchange failed.
-        // We still move the file to the error prefix before propagating.
+        // handled=true — exception is consumed by our handler.
+        // We move the file to Archive (not Error), publish a CORRUPTED audit record,
+        // then clean up. The S3 consumer sees success and does not attempt further moves.
         onException(Exception.class)
-            .handled(false)
-            .process(this::moveToError)
-            .process(this::logFileError)
+            .handled(true)
+            .process(this::moveToArchiveOnError)
+            .process(this::publishCorruptedFileAudit)
+            .process(exchange -> routeLoggingProcessor.cleanup(exchange))
             .end();
 
         from(s3Properties.buildUri())
@@ -104,7 +106,7 @@ public class ProfileReadsS3Listner extends BaseRoute {
     // ── S3 file lifecycle helpers ─────────────────────────────────────────────
 
     private void moveToArchive(Exchange exchange) {
-        String bucket   = exchange.getIn().getHeader(HDR_BUCKET, String.class);
+        String bucket    = exchange.getIn().getHeader(HDR_BUCKET, String.class);
         String sourceKey = exchange.getIn().getHeader(HDR_KEY,    String.class);
         String fileName  = fileNameFrom(sourceKey);
         String archiveKey = s3Properties.getArchivePrefix() + fileName;
@@ -116,24 +118,67 @@ public class ProfileReadsS3Listner extends BaseRoute {
             "bucket", bucket, "sourceKey", sourceKey, "archiveKey", archiveKey);
     }
 
-    private void moveToError(Exchange exchange) {
+    /**
+     * Called from the error handler: moves the corrupted file to the Archive prefix
+     * (not the Error prefix). Mirrors {@link #moveToArchive} but tolerates null
+     * headers that might occur if the exchange was initialised before the S3
+     * consumer set its headers.
+     */
+    private void moveToArchiveOnError(Exchange exchange) {
         String bucket    = exchange.getIn().getHeader(HDR_BUCKET, String.class);
         String sourceKey = exchange.getIn().getHeader(HDR_KEY,    String.class);
-        if (bucket == null || sourceKey == null) return;
+        String correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
 
-        String fileName = fileNameFrom(sourceKey);
-        String errorKey = s3Properties.getErrorPrefix() + fileName;
+        if (bucket == null || sourceKey == null) {
+            log.warn("s3CorruptedFileMoveSkipped", correlationId,
+                "reason", "bucket or key header missing");
+            return;
+        }
+
+        String fileName   = fileNameFrom(sourceKey);
+        String archiveKey = s3Properties.getArchivePrefix() + fileName;
 
         try {
-            copyAndDelete(bucket, sourceKey, errorKey);
-            log.warn("s3FileMovedToError",
-                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
-                "bucket", bucket, "sourceKey", sourceKey, "errorKey", errorKey);
+            copyAndDelete(bucket, sourceKey, archiveKey);
+            log.info("s3CorruptedFileArchivedNotErrored", correlationId,
+                "bucket", bucket, "sourceKey", sourceKey, "archiveKey", archiveKey);
         } catch (Exception e) {
-            log.error("s3FileMoveToErrorFailed",
-                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class), e,
+            log.error("s3CorruptedFileMoveToArchiveFailed", correlationId, e,
                 "bucket", bucket, "sourceKey", sourceKey);
         }
+    }
+
+    private void publishCorruptedFileAudit(Exchange exchange) {
+        Exception ex            = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Exception.class);
+        String    sourceKey     = exchange.getIn().getHeader(HDR_KEY, String.class);
+        String    correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
+        int       successRows   = exchange.getProperty(LogConstants.PROP_SUCCESS_ROWS, 0, Integer.class);
+
+        // CORRUPTED      — no rows processed at all (bad header, wrong encoding, etc.)
+        // PARTIAL_FAILURE — exception thrown mid-stream; some rows already published to Kafka
+        String status = (successRows > 0)
+            ? LogConstants.FILE_STATUS_PARTIAL_FAILURE
+            : LogConstants.FILE_STATUS_CORRUPTED;
+
+        log.warn("s3ProfileReadFileFailed", correlationId,
+            "s3Key",     sourceKey,
+            "status",    status,
+            "errorType", ex != null ? ex.getClass().getSimpleName() : "unknown",
+            "error",     ex != null ? ex.getMessage() : "unknown",
+            "successRowsBeforeFailure", successRows);
+
+        // FILE_NAME header might not be set for S3; fall back to the S3 key name
+        if (exchange.getIn().getHeader(Exchange.FILE_NAME) == null && sourceKey != null) {
+            exchange.getIn().setHeader(Exchange.FILE_NAME, fileNameFrom(sourceKey));
+        }
+
+        exchange.setProperty("profileReads.source",               "S3");
+        exchange.setProperty(LogConstants.PROP_FILE_STATUS,       status);
+        exchange.setProperty(LogConstants.PROP_FILE_ERROR_MESSAGE,
+            ex != null ? ex.getClass().getSimpleName() + ": " + ex.getMessage() : "Unknown error");
+
+        exchange.getContext().createProducerTemplate()
+            .send("direct:publishProfileReadsAudit", exchange);
     }
 
     private void copyAndDelete(String bucket, String sourceKey, String destKey) {
@@ -145,17 +190,6 @@ public class ProfileReadsS3Listner extends BaseRoute {
         s3Client.deleteObject(DeleteObjectRequest.builder()
             .bucket(bucket).key(sourceKey)
             .build());
-    }
-
-    private void logFileError(Exchange exchange) {
-        Exception ex          = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Exception.class);
-        String    key         = exchange.getIn().getHeader(HDR_KEY, String.class);
-        String    correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
-
-        log.warn("s3ProfileReadFileProcessingFailed", correlationId,
-            "s3Key",     key,
-            "errorType", ex != null ? ex.getClass().getSimpleName() : "unknown",
-            "error",     ex != null ? ex.getMessage() : "unknown");
     }
 
     private static String fileNameFrom(String s3Key) {
