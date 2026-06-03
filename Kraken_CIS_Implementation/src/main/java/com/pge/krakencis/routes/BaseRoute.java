@@ -59,10 +59,16 @@ public abstract class BaseRoute extends RouteBuilder {
         RouteDefinition route = from(fromUri).routeId(routeId);
 
         route.onException(ValidationException.class)
-            .handled(true).process(exceptionProcessor.validation(operation)).end();
+            .handled(true)
+            .process(exceptionProcessor.validation(operation))
+            .process(exchange -> routeLoggingProcessor.cleanup(exchange))
+            .end();
 
         route.onException(TransformationException.class)
-            .handled(true).process(exceptionProcessor.transformation(operation)).end();
+            .handled(true)
+            .process(exceptionProcessor.transformation(operation))
+            .process(exchange -> routeLoggingProcessor.cleanup(exchange))
+            .end();
 
         // Transient failures from downstream services (e.g. ODR mock down, Kafka unavailable).
         // Must be declared BEFORE KrakenBaseException — RetryableException is a subclass and
@@ -75,10 +81,14 @@ public abstract class BaseRoute extends RouteBuilder {
             .retryAttemptedLogLevel(LoggingLevel.WARN)
             .handled(true)
             .process(exceptionProcessor.systemWithRetryInfo(operation))
+            .process(exchange -> routeLoggingProcessor.cleanup(exchange))
             .end();
 
         route.onException(KrakenBaseException.class)
-            .handled(true).process(exceptionProcessor.domain(operation)).end();
+            .handled(true)
+            .process(exceptionProcessor.domain(operation))
+            .process(exchange -> routeLoggingProcessor.cleanup(exchange))
+            .end();
 
         // Catch-all for unexpected transient failures — same retry behaviour as RetryableException.
         route.onException(Exception.class)
@@ -89,6 +99,7 @@ public abstract class BaseRoute extends RouteBuilder {
             .retryAttemptedLogLevel(LoggingLevel.WARN)
             .handled(true)
             .process(exceptionProcessor.systemWithRetryInfo(operation))
+            .process(exchange -> routeLoggingProcessor.cleanup(exchange))
             .end();
 
         route.process(correlationIdProcessor)

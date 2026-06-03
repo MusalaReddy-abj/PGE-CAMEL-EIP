@@ -82,10 +82,23 @@ public class RouteLoggingProcessor {
             long duration  = startTime != null ? System.currentTimeMillis() - startTime : -1;
             // Audit log runs first so it still carries traceId/spanId in MDC
             auditLogger.logRouteEnd(exchange, operation, duration);
-            // Close OTel scope → span ends → OTel bridge removes traceId/spanId from MDC
-            mdcContextManager.endTrace(exchange);
-            mdcContextManager.clearMDC();
+            cleanup(exchange);
         };
+    }
+
+    /**
+     * Ends the OTel span and clears all MDC keys.
+     *
+     * Must be called on BOTH the happy path (via {@link #exit}) AND every
+     * {@code onException} handler. Without this on error paths, the OTel
+     * {@code SpanInScope} is never closed on the Camel thread-pool thread.
+     * When that thread is reused for the next request, {@code tracer.nextSpan()}
+     * sees the leaked scope as the parent and creates a child span — causing the
+     * same {@code traceId}/{@code spanId} to bleed across unrelated requests.
+     */
+    public void cleanup(Exchange exchange) {
+        mdcContextManager.endTrace(exchange);
+        mdcContextManager.clearMDC();
     }
 
     private String bodyType(Exchange exchange) {

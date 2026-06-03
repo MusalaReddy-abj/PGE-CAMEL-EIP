@@ -46,7 +46,9 @@ external-services:
       timeout: 30000
       content-type: "text/xml; charset=utf-8"
 
-# HTTP outbound client — retry behaviour and error topic routing.
+# HTTP outbound client — in-process retry behaviour.
+# Each Kafka consumer route defines its own retry/DLQ topic via @Value injection
+# (e.g. kafka.topic.rcdc-retry → kraken-rcdc-retry-events).
 # SOAP Server faults (detected in body on HTTP 200) are mapped to status 500
 # before this list is evaluated, so they are automatically retried.
 http:
@@ -57,8 +59,6 @@ http:
       backoff-multiplier: 2.0
       max-delay-ms: 30000
       retryable-status-codes: [404, 408, 429, 500, 502, 503, 504]
-    retry-topic: kraken-http-outbound-retry
-    dlq-topic:   kraken-http-outbound-dlq
 
 camel:
   springboot:
