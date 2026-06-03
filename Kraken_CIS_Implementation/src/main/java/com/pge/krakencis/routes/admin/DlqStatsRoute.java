@@ -61,6 +61,18 @@ public class DlqStatsRoute extends RouteBuilder {
     @Value("${kafka.producer.brokers:localhost:9092}")
     private String bootstrapServers;
 
+    @Value("${kafka.producer.security-protocol:PLAINTEXT}")
+    private String securityProtocol;
+
+    @Value("${kafka.producer.sasl-mechanism:}")
+    private String saslMechanism;
+
+    @Value("${kafka.producer.sasl-jaas-config:}")
+    private String saslJaasConfig;
+
+    @Value("${kafka.producer.sasl-client-callback-handler-class:}")
+    private String saslCallbackHandlerClass;
+
     @Value("${kafka.topic.rcdc-dlq:kraken-rcdc-dlq-events}")
     private String rcdcDlqTopic;
 
@@ -114,9 +126,16 @@ public class DlqStatsRoute extends RouteBuilder {
         List<String> topics = List.of(rcdcDlqTopic, rcdcHesDlqTopic, profileReadsDlqTopic);
 
         Properties props = new Properties();
-        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,         bootstrapServers);
-        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG,        String.valueOf(TIMEOUT_S * 1_000));
-        props.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG,    String.valueOf(TIMEOUT_S * 1_000));
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,      bootstrapServers);
+        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG,     String.valueOf(TIMEOUT_S * 1_000));
+        props.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, String.valueOf(TIMEOUT_S * 1_000));
+
+        if (!"PLAINTEXT".equalsIgnoreCase(securityProtocol)) {
+            props.put("security.protocol",                    securityProtocol);
+            if (!saslMechanism.isBlank())          props.put("sasl.mechanism",                        saslMechanism);
+            if (!saslJaasConfig.isBlank())         props.put("sasl.jaas.config",                      saslJaasConfig);
+            if (!saslCallbackHandlerClass.isBlank()) props.put("sasl.client.callback.handler.class", saslCallbackHandlerClass);
+        }
 
         try (AdminClient admin = AdminClient.create(props)) {
             List<Map<String, Object>> stats    = computeLags(admin, topics);
