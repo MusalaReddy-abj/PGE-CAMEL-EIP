@@ -88,6 +88,26 @@ public class KafkaProducerConfig {
     }
 
     /**
+     * Security-only query string fragment — appended to Kafka consumer URIs that
+     * are built inline in each route and cannot go through {@link #buildQueryString()}.
+     * Returns an empty string when {@code securityProtocol} is PLAINTEXT so local
+     * dev routes are unaffected.
+     */
+    public String buildSecurityQueryString() {
+        if ("PLAINTEXT".equalsIgnoreCase(securityProtocol)) return "";
+        StringBuilder q = new StringBuilder();
+        q.append("&securityProtocol=").append(securityProtocol);
+        if (!saslMechanism.isBlank())
+            q.append("&saslMechanism=").append(saslMechanism);
+        if (!saslJaasConfig.isBlank())
+            q.append("&saslJaasConfig=").append(saslJaasConfig);
+        if (!saslClientCallbackHandlerClass.isBlank())
+            q.append("&additionalProperties[sasl.client.callback.handler.class]=")
+             .append(saslClientCallbackHandlerClass);
+        return q.toString();
+    }
+
+    /**
      * Full URI for a known topic (used in non-dynamic routes).
      */
     public String buildUri(String topic) {

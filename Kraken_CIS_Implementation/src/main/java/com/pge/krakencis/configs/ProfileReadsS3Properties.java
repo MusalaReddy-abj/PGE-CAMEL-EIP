@@ -78,9 +78,6 @@ public class ProfileReadsS3Properties {
             uri.append("&prefix=").append(sourcePrefix);
         }
 
-        // Only process CSV files — prevents .keep placeholder and any other non-CSV
-        // objects in the source prefix from triggering spurious audit records.
-        uri.append("&fileName=.*\\.csv");
 
         if (connection.isUseDefaultCredentials()) {
             uri.append("&useDefaultCredentialsProvider=true");

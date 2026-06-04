@@ -96,7 +96,8 @@ public class RcdcRetryKafkaRoute extends BaseKafkaConsumerRoute {
             + "&maxPollRecords=50"
             + "&autoCommitEnable=false&allowManualCommit=true"
             + "&maxPollIntervalMs=" + maxPollIntervalMs
-            + "&consumersCount={{kafka.consumer.consumers-count:1}}";
+            + "&consumersCount={{kafka.consumer.consumers-count:1}}"
+            + securityQueryString();
 
         RouteDefinition route = from(uri).routeId("route-rcdc-retry-consumer");
 

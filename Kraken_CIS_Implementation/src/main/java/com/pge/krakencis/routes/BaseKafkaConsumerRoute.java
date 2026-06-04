@@ -8,6 +8,7 @@ import com.pge.krakencis.exceptions.ValidationException;
 import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.RouteLoggingProcessor;
 import com.pge.krakencis.logging.StructuredLogger;
+import com.pge.krakencis.configs.KafkaProducerConfig;
 import com.pge.krakencis.processors.CorrelationIdProcessor;
 import com.pge.krakencis.processors.RouteExceptionProcessor;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -57,6 +58,14 @@ public abstract class BaseKafkaConsumerRoute extends BaseRoute {
     // Field-injected to avoid cascading constructor changes across all subclasses.
     @Autowired
     protected MeterRegistry meterRegistry;
+
+    @Autowired
+    private KafkaProducerConfig kafkaProducerConfig;
+
+    /** Security query-string fragment appended to every consumer Kafka URI. */
+    protected String securityQueryString() {
+        return kafkaProducerConfig != null ? kafkaProducerConfig.buildSecurityQueryString() : "";
+    }
 
     protected BaseKafkaConsumerRoute(CorrelationIdProcessor  correlationIdProcessor,
                                      RouteLoggingProcessor   routeLoggingProcessor,

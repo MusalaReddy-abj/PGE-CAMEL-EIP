@@ -62,7 +62,8 @@ public class RcdcResponseHesKafkaListner extends BaseKafkaConsumerRoute {
             + "&autoCommitEnable=false&allowManualCommit=true"
             + "&consumersCount={{kafka.consumer.consumers-count:1}}"
             + "&maxPollIntervalMs={{kafka.consumer.max-poll-interval-ms:300000}}"
-            + "&heartbeatIntervalMs={{kafka.consumer.heartbeat-interval-ms:10000}}";
+            + "&heartbeatIntervalMs={{kafka.consumer.heartbeat-interval-ms:10000}}"
+            + securityQueryString();
 
         RouteDefinition route = from(uri).routeId("route-rcdc-hes-kafka-consumer");
 
