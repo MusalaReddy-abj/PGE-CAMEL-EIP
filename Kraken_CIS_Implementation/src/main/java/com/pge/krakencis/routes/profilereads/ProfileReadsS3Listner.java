@@ -10,6 +10,7 @@ import com.pge.krakencis.processors.CorrelationIdProcessor;
 import com.pge.krakencis.processors.RouteExceptionProcessor;
 import com.pge.krakencis.processors.profilereads.ProfileReadsCsvProcessor;
 import com.pge.krakencis.routes.BaseRoute;
+import jakarta.annotation.PostConstruct;
 import org.apache.camel.Exchange;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -79,11 +80,14 @@ public class ProfileReadsS3Listner extends BaseRoute {
         this.s3Client                 = s3Client;
     }
 
+    /** Creates the source-prefix placeholder once at startup so the folder is visible immediately. */
+    @PostConstruct
+    public void createSourceFolderPlaceholder() {
+        recreateSourceFolder(s3Properties.getBucketName());
+    }
+
     @Override
     public void configure() {
-        // handled=true — exception is consumed by our handler.
-        // We move the file to Archive (not Error), publish a CORRUPTED audit record,
-        // then clean up. The S3 consumer sees success and does not attempt further moves.
         onException(Exception.class)
             .handled(true)
             .process(this::moveToArchiveOnError)
@@ -96,15 +100,19 @@ public class ProfileReadsS3Listner extends BaseRoute {
             .description("Poll ProfileReads CSV files from S3, parse each row, publish to Kafka")
             .threads(s3Properties.getThreadPoolSize())
             .process(correlationIdProcessor)
-            .process(routeLoggingProcessor.entry(OPERATION))
-            .process(profileReadsCsvProcessor)                                  // ← reused from FTP flow
-            .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsTopic))
-            .to("direct:publishToKafka")                                        // ← reused from FTP flow
-            .to("direct:publishProfileReadsDlq")                                // partial-failure rows → DLQ
-            .setProperty("profileReads.source", constant("S3"))
-            .to("direct:publishProfileReadsAudit")                              // file-level audit report → audit topic
-            .process(this::moveToArchive)
-            .process(routeLoggingProcessor.exit(OPERATION));
+            // Skip non-CSV objects (e.g. .keep placeholder) — complete silently without
+            // any processing, audit, or file movement so .keep stays in place permanently.
+            .filter(header(HDR_KEY).regex(".*\\.csv"))
+                .process(routeLoggingProcessor.entry(OPERATION))
+                .process(profileReadsCsvProcessor)
+                .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsTopic))
+                .to("direct:publishToKafka")
+                .to("direct:publishProfileReadsDlq")
+                .setProperty("profileReads.source", constant("S3"))
+                .to("direct:publishProfileReadsAudit")
+                .process(this::moveToArchive)
+                .process(routeLoggingProcessor.exit(OPERATION))
+            .end();
     }
 
     // ── S3 file lifecycle helpers ─────────────────────────────────────────────
@@ -195,11 +203,6 @@ public class ProfileReadsS3Listner extends BaseRoute {
         s3Client.deleteObject(DeleteObjectRequest.builder()
             .bucket(bucket).key(sourceKey)
             .build());
-
-        // Recreate the source prefix as a zero-byte placeholder so the
-        // Reads/profilereads/ "folder" remains visible in the S3 console
-        // after the processed file is moved out.
-        recreateSourceFolder(bucket);
     }
 
     private void recreateSourceFolder(String bucket) {
