@@ -2,6 +2,7 @@ package com.pge.krakencis.routes.rcdc.request;
 
 import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.RouteLoggingProcessor;
+import com.pge.krakencis.logging.SpanEnricher;
 import com.pge.krakencis.processors.CorrelationIdProcessor;
 import com.pge.krakencis.processors.RouteExceptionProcessor;
 import com.pge.krakencis.processors.SoapEnvelopeExtractorProcessor;
@@ -59,6 +60,7 @@ public class RcdcRequestHttpListner extends BaseRoute {
 
         processingRoute("direct:process-rcdc", "route-post-rcdc", OPERATION, route ->
             route
+                .process(SpanEnricher.httpRoute("POST", "/api/v1/rcdc"))
                 .process(soapEnvelopeExtractorProcessor)  // strip SOAP envelope → plain requestMessage
                 .unmarshal(jaxbFormat)
                 .process(rcdcRequestProcessor)
