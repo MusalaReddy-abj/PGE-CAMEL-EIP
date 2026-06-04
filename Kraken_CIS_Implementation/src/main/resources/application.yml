@@ -75,6 +75,12 @@ camel:
     stream-caching-spool-threshold: 104857600   # 100 MB
   main:
     auto-startup: true
+  # Camel OpenTelemetry — wraps each route and processor with an OTel span.
+  # Works alongside micrometer-tracing-bridge-otel so traces include the full
+  # Camel pipeline (route entry → processors → Kafka publish → exit).
+  opentelemetry:
+    enabled: true
+    service-name: kraken-cis
   # Global Kafka security defaults — applied to ALL Camel Kafka endpoints
   # (both producer toD() and every consumer route URI).
   # Must be under camel.component.kafka.configuration.* — not directly under
@@ -98,8 +104,17 @@ management:
   tracing:
     sampling:
       probability: 1.0     # 100% in dev/test — reduce to 0.1 in prod
-  # To export spans to Zipkin add:  management.zipkin.tracing.endpoint=http://zipkin:9411/api/v2/spans
-  # To export to Jaeger/Tempo add:  management.otlp.tracing.endpoint=http://otel-collector:4318/v1/traces
+
+  # OTLP exporter — sends traces and metrics to OTel Collector.
+  # Override OTEL_EXPORTER_OTLP_ENDPOINT env var in production to point to your collector.
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    metrics:
+      export:
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 60s
+
   endpoints:
     web:
       exposure:
