@@ -100,18 +100,32 @@ public class ProfileReadsS3Listner extends BaseRoute {
             .description("Poll ProfileReads CSV files from S3, parse each row, publish to Kafka")
             .threads(s3Properties.getThreadPoolSize())
             .process(correlationIdProcessor)
-            // Skip non-CSV objects (e.g. .keep placeholder) — complete silently without
-            // any processing, audit, or file movement so .keep stays in place permanently.
-            .filter(header(HDR_KEY).regex(".*\\.csv"))
-                .process(routeLoggingProcessor.entry(OPERATION))
-                .process(profileReadsCsvProcessor)
-                .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsTopic))
-                .to("direct:publishToKafka")
-                .to("direct:publishProfileReadsDlq")
-                .setProperty("profileReads.source", constant("S3"))
-                .to("direct:publishProfileReadsAudit")
-                .process(this::moveToArchive)
-                .process(routeLoggingProcessor.exit(OPERATION))
+            .choice()
+                // Only .csv files (case-insensitive) are processed.
+                .when(header(HDR_KEY).regex("(?i).*\\.csv"))
+                    .process(routeLoggingProcessor.entry(OPERATION))
+                    .process(profileReadsCsvProcessor)
+                    .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsTopic))
+                    .to("direct:publishToKafka")
+                    .to("direct:publishProfileReadsDlq")
+                    .setProperty("profileReads.source", constant("S3"))
+                    .to("direct:publishProfileReadsAudit")
+                    .process(this::moveToArchive)
+                    .process(routeLoggingProcessor.exit(OPERATION))
+                // .keep placeholder: silently complete — stays in place, folder remains visible.
+                .when(header(HDR_KEY).endsWith(".keep"))
+                    .stop()
+                // All other file types (.txt, .xml, etc.): log and move to error prefix
+                // so they are not picked up again on the next poll cycle.
+                .otherwise()
+                    .process(exchange -> {
+                        String key = exchange.getIn().getHeader(HDR_KEY, String.class);
+                        String cid = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
+                        log.warn("s3UnsupportedFileTypeSkipped", cid,
+                            "s3Key", key, "errorPrefix", s3Properties.getErrorPrefix(),
+                            "hint", "Only .csv files are processed from this prefix");
+                        moveUnsupportedFile(exchange);
+                    })
             .end();
     }
 
@@ -203,6 +217,26 @@ public class ProfileReadsS3Listner extends BaseRoute {
         s3Client.deleteObject(DeleteObjectRequest.builder()
             .bucket(bucket).key(sourceKey)
             .build());
+    }
+
+    private void moveUnsupportedFile(Exchange exchange) {
+        String bucket    = exchange.getIn().getHeader(HDR_BUCKET, String.class);
+        String sourceKey = exchange.getIn().getHeader(HDR_KEY,    String.class);
+        String cid       = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
+
+        if (bucket == null || sourceKey == null) return;
+
+        String fileName  = fileNameFrom(sourceKey);
+        String errorKey  = s3Properties.getErrorPrefix() + fileName;
+
+        try {
+            copyAndDelete(bucket, sourceKey, errorKey);
+            log.info("s3UnsupportedFileMoved", cid,
+                "bucket", bucket, "sourceKey", sourceKey, "errorKey", errorKey);
+        } catch (Exception e) {
+            log.error("s3UnsupportedFileMoveFailed", cid, e,
+                "bucket", bucket, "sourceKey", sourceKey);
+        }
     }
 
     private void recreateSourceFolder(String bucket) {
