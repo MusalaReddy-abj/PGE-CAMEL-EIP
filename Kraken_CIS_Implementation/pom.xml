@@ -167,18 +167,19 @@
             <artifactId>micrometer-tracing-bridge-otel</artifactId>
         </dependency>
 
-        <!-- To export traces to Zipkin (add when Zipkin is available):
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-tracing-reporter-wavefront</artifactId>
-        </dependency>
-        OR for OTLP (Jaeger / Grafana Tempo):
+        <!-- OTLP exporter — sends traces to OTel Collector (Jaeger / Grafana Tempo).
+             Endpoint configured via management.otlp.tracing.endpoint in application.yml. -->
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-exporter-otlp</artifactId>
         </dependency>
-        + management.otlp.tracing.endpoint=http://otel-collector:4318/v1/traces
-        -->
+
+        <!-- Camel OpenTelemetry — instruments every Camel route/processor with OTel spans
+             so distributed traces include the full Camel pipeline, not just HTTP boundaries. -->
+        <dependency>
+            <groupId>org.apache.camel.springboot</groupId>
+            <artifactId>camel-opentelemetry-starter</artifactId>
+        </dependency>
 
         <!-- Logstash JSON encoder -->
         <dependency>
