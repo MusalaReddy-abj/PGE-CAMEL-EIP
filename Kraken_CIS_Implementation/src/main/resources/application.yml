@@ -105,14 +105,18 @@ management:
     sampling:
       probability: 1.0     # 100% in dev/test — reduce to 0.1 in prod
 
-  # OTLP exporter — sends traces and metrics to OTel Collector.
-  # Override OTEL_EXPORTER_OTLP_ENDPOINT env var in production to point to your collector.
+  # OTLP exporter — disabled by default (no collector running locally).
+  # Set OTEL_EXPORTER_OTLP_ENDPOINT env var to enable:
+  #   export OTEL_EXPORTER_OTLP_ENDPOINT=http://your-collector:4318
   otlp:
     tracing:
-      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
+      export:
+        enabled: ${OTEL_ENABLED:false}
     metrics:
       export:
-        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        enabled: ${OTEL_ENABLED:false}
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:}/v1/metrics
         step: 60s
 
   endpoints:
