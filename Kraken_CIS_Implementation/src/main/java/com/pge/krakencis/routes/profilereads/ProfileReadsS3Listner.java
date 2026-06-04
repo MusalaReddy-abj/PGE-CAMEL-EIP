@@ -118,6 +118,12 @@ public class ProfileReadsS3Listner extends BaseRoute {
                 // .keep placeholder: silently complete — stays in place, folder remains visible.
                 .when(header(HDR_KEY).endsWith(".keep"))
                     .stop()
+                // S3 "folder" placeholder objects — a zero-byte object whose key ends in "/"
+                // (e.g. the prefix marker "Reads/profilereads/" itself). These are NOT files;
+                // leave them in place. Moving/deleting them is what made the folder disappear
+                // and produced spurious "unsupported file" → Error moves every poll.
+                .when(header(HDR_KEY).endsWith("/"))
+                    .stop()
                 // All other file types (.txt, .xml, etc.): log and move to error prefix
                 // so they are not picked up again on the next poll cycle.
                 .otherwise()
