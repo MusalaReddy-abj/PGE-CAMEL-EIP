@@ -119,7 +119,6 @@ public class DlqStatsRoute extends RouteBuilder {
 
         from("direct:dlq-stats")
             .routeId("route-dlq-stats")
-            .process(com.pge.krakencis.logging.SpanEnricher.httpRoute("GET", "/api/v1/admin/dlq/stats"))
             .process(this::buildDlqStats);
     }
 
