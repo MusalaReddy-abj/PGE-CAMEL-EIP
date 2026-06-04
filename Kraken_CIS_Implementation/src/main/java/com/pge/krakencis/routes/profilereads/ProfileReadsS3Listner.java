@@ -18,7 +18,6 @@ import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
-import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 /**
@@ -132,16 +131,22 @@ public class ProfileReadsS3Listner extends BaseRoute {
     // ── S3 file lifecycle helpers ─────────────────────────────────────────────
 
     private void moveToArchive(Exchange exchange) {
-        String bucket    = exchange.getIn().getHeader(HDR_BUCKET, String.class);
-        String sourceKey = exchange.getIn().getHeader(HDR_KEY,    String.class);
-        String fileName  = fileNameFrom(sourceKey);
+        String bucket     = exchange.getIn().getHeader(HDR_BUCKET, String.class);
+        String sourceKey  = exchange.getIn().getHeader(HDR_KEY,    String.class);
+        String cid        = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
+        String fileName   = fileNameFrom(sourceKey);
         String archiveKey = s3Properties.getArchivePrefix() + fileName;
 
-        copyAndDelete(bucket, sourceKey, archiveKey);
-
-        log.info("s3FileArchived",
-            exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
-            "bucket", bucket, "sourceKey", sourceKey, "archiveKey", archiveKey);
+        try {
+            copyToDestination(bucket, sourceKey, archiveKey);
+            log.info("s3FileArchived", cid,
+                "bucket", bucket, "sourceKey", sourceKey, "archiveKey", archiveKey);
+        } catch (Exception e) {
+            // File may have been deleted externally or by the S3 consumer internally.
+            // Log and continue — Kafka messages were already published successfully.
+            log.warn("s3ArchiveFailed", cid, "bucket", bucket,
+                "sourceKey", sourceKey, "error", e.getMessage());
+        }
     }
 
     /**
@@ -164,7 +169,7 @@ public class ProfileReadsS3Listner extends BaseRoute {
         String errorKey  = s3Properties.getErrorPrefix() + fileName;
 
         try {
-            copyAndDelete(bucket, sourceKey, errorKey);
+            copyToDestination(bucket, sourceKey, errorKey);
             log.info("s3CorruptedFileMovedToError", correlationId,
                 "bucket", bucket, "sourceKey", sourceKey, "errorKey", errorKey);
         } catch (Exception e) {
@@ -208,14 +213,14 @@ public class ProfileReadsS3Listner extends BaseRoute {
             .send("direct:publishProfileReadsAudit", exchange);
     }
 
-    private void copyAndDelete(String bucket, String sourceKey, String destKey) {
+    // Only copy — no manual delete. deleteAfterRead=true in the S3 URI means
+    // Camel deletes the source object after the exchange completes. Doing our
+    // own delete was causing NoSuchKeyException when Camel's internal cleanup
+    // also tried to delete the same key.
+    private void copyToDestination(String bucket, String sourceKey, String destKey) {
         s3Client.copyObject(CopyObjectRequest.builder()
             .sourceBucket(bucket).sourceKey(sourceKey)
             .destinationBucket(bucket).destinationKey(destKey)
-            .build());
-
-        s3Client.deleteObject(DeleteObjectRequest.builder()
-            .bucket(bucket).key(sourceKey)
             .build());
     }
 
@@ -230,7 +235,7 @@ public class ProfileReadsS3Listner extends BaseRoute {
         String errorKey  = s3Properties.getErrorPrefix() + fileName;
 
         try {
-            copyAndDelete(bucket, sourceKey, errorKey);
+            copyToDestination(bucket, sourceKey, errorKey);
             log.info("s3UnsupportedFileMoved", cid,
                 "bucket", bucket, "sourceKey", sourceKey, "errorKey", errorKey);
         } catch (Exception e) {
