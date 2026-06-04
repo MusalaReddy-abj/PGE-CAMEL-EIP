@@ -75,12 +75,6 @@ camel:
     stream-caching-spool-threshold: 104857600   # 100 MB
   main:
     auto-startup: true
-  # Camel OpenTelemetry — wraps each route and processor with an OTel span.
-  # Works alongside micrometer-tracing-bridge-otel so traces include the full
-  # Camel pipeline (route entry → processors → Kafka publish → exit).
-  opentelemetry:
-    enabled: true
-    service-name: kraken-cis
   # Global Kafka security defaults — applied to ALL Camel Kafka endpoints
   # (both producer toD() and every consumer route URI).
   # Must be under camel.component.kafka.configuration.* — not directly under
@@ -104,23 +98,6 @@ management:
   tracing:
     sampling:
       probability: 1.0     # 100% in dev/test — reduce to 0.1 in prod
-  # OTel Resource attributes — authoritative source of service.name on every span.
-  # Without this, service.name falls back to spring.application.name
-  # (kraken-cis-implementation), which is NOT what camel.opentelemetry.service-name
-  # implies. Pin it here so Camel spans and Micrometer spans share one identity.
-  opentelemetry:
-    resource-attributes:
-      service.name: kraken-cis
-      service.namespace: pge
-      deployment.environment: ${ENVIRONMENT:dev}
-  # OTLP span export is OFF (no collector running, exporter dependency commented out in pom.xml).
-  # traceId/spanId are still created and injected into MDC for log correlation, and Camel
-  # routes are span-instrumented locally. To ship spans externally:
-  #   1. Uncomment opentelemetry-exporter-otlp in pom.xml
-  #   2. Add under this management block:
-  #        otlp:
-  #          tracing:
-  #            endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
 
   endpoints:
     web:
