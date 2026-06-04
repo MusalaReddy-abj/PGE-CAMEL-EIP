@@ -104,20 +104,14 @@ management:
   tracing:
     sampling:
       probability: 1.0     # 100% in dev/test — reduce to 0.1 in prod
-
-  # OTLP exporter — disabled by default (no collector running locally).
-  # Set OTEL_EXPORTER_OTLP_ENDPOINT env var to enable:
-  #   export OTEL_EXPORTER_OTLP_ENDPOINT=http://your-collector:4318
-  otlp:
-    tracing:
-      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
-      export:
-        enabled: ${OTEL_ENABLED:false}
-    metrics:
-      export:
-        enabled: ${OTEL_ENABLED:false}
-        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:}/v1/metrics
-        step: 60s
+  # OTLP span export is OFF (no collector running, exporter dependency commented out in pom.xml).
+  # traceId/spanId are still created and injected into MDC for log correlation, and Camel
+  # routes are span-instrumented locally. To ship spans externally:
+  #   1. Uncomment opentelemetry-exporter-otlp in pom.xml
+  #   2. Add under this management block:
+  #        otlp:
+  #          tracing:
+  #            endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
 
   endpoints:
     web:

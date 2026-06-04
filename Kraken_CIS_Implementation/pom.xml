@@ -167,19 +167,24 @@
             <artifactId>micrometer-tracing-bridge-otel</artifactId>
         </dependency>
 
-        <!-- OTLP exporter — sends traces to OTel Collector (Jaeger / Grafana Tempo).
-             Endpoint configured via management.otlp.tracing.endpoint in application.yml. -->
-        <dependency>
-            <groupId>io.opentelemetry</groupId>
-            <artifactId>opentelemetry-exporter-otlp</artifactId>
-        </dependency>
-
         <!-- Camel OpenTelemetry — instruments every Camel route/processor with OTel spans
              so distributed traces include the full Camel pipeline, not just HTTP boundaries. -->
         <dependency>
             <groupId>org.apache.camel.springboot</groupId>
             <artifactId>camel-opentelemetry-starter</artifactId>
         </dependency>
+
+        <!-- OTLP exporter — ships spans to an OTel Collector (Jaeger / Grafana Tempo).
+             Commented out: Spring Boot 3.2 has no per-exporter disable flag, so with this
+             on the classpath it ALWAYS tries to export (default http://localhost:4318) and
+             fails at startup / spams ConnectException when no collector is running.
+             To enable export: uncomment this, then set in application.yml under management:
+               otlp.tracing.endpoint: http://<collector-host>:4318/v1/traces
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+        -->
 
         <!-- Logstash JSON encoder -->
         <dependency>
