@@ -74,10 +74,6 @@ public class ProfileReadsS3Properties {
             .append("&moveAfterRead=false")
             .append("&includeBody=true")               // stream file content into exchange body
             .append("&autocloseBody=false")            // ProfileReadsCsvProcessor closes stream via try-with-resources
-            // idempotent=true — prevents the same S3 key being processed twice within a
-            // session (in-memory store). Guards against concurrent thread pick-up of the
-            // same object when threadPoolSize > 1.
-            .append("&idempotent=true")
             .append("&maxMessagesPerPoll=").append(maxMessagesPerPoll)
             .append("&delay=").append(delayMs)
             .append("&sendEmptyMessageWhenIdle=false");
