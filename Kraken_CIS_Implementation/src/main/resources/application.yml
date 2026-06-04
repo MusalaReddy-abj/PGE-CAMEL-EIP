@@ -34,15 +34,15 @@ rest:
 external-services:
   services:
     rcdc:
-      url: http://192.168.4.34:9000/rcdcrequest
+      url: http://k8s-kong-kongprox-9acef1f816-46ee569626f12d48.elb.ap-south-2.amazonaws.com/rcdcrequest
       timeout: 30000
       content-type: application/json
     rcdc-mdm-notification:
-      url: http://192.168.4.34:9000/rcdcswitchstatus
+      url: http://k8s-kong-kongprox-9acef1f816-46ee569626f12d48.elb.ap-south-2.amazonaws.com/rcdcswitchstatus
       timeout: 30000
       content-type: "text/xml; charset=utf-8"
     odr-mock:
-      url: http://192.168.4.34:9000/ondemandread
+      url: http://k8s-kong-kongprox-9acef1f816-46ee569626f12d48.elb.ap-south-2.amazonaws.com/ondemandread
       timeout: 30000
       content-type: "text/xml; charset=utf-8"
 
