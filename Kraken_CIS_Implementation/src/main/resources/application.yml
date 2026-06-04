@@ -104,6 +104,15 @@ management:
   tracing:
     sampling:
       probability: 1.0     # 100% in dev/test — reduce to 0.1 in prod
+  # OTel Resource attributes — authoritative source of service.name on every span.
+  # Without this, service.name falls back to spring.application.name
+  # (kraken-cis-implementation), which is NOT what camel.opentelemetry.service-name
+  # implies. Pin it here so Camel spans and Micrometer spans share one identity.
+  opentelemetry:
+    resource-attributes:
+      service.name: kraken-cis
+      service.namespace: pge
+      deployment.environment: ${ENVIRONMENT:dev}
   # OTLP span export is OFF (no collector running, exporter dependency commented out in pom.xml).
   # traceId/spanId are still created and injected into MDC for log correlation, and Camel
   # routes are span-instrumented locally. To ship spans externally:

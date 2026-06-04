@@ -106,6 +106,7 @@ public class RcdcRetryKafkaRoute extends BaseKafkaConsumerRoute {
         configureRetryQueueErrorHandlers(route, rcdcRetryTopic, rcdcDlqTopic, SERVICE_NAME);
 
         route
+            .process(com.pge.krakencis.logging.SpanEnricher.kafkaConsume())
             .process(exchange -> exchange.setProperty(
                 LogConstants.PROP_ORIGINAL_BODY, exchange.getIn().getBody(String.class)))
             .process(this::extractCorrelationIdFromRetry)
