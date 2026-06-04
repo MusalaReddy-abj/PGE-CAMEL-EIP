@@ -66,11 +66,11 @@ public class ProfileReadsS3Properties {
         StringBuilder uri = new StringBuilder("aws2-s3://")
             .append(bucketName)
             .append("?region=").append(connection.getRegion())
-            // deleteAfterRead=true — let Camel delete the source object after the exchange
-            // completes. Our route does the archive copy first (moveToArchive), then Camel
-            // cleans up the source. This avoids NoSuchKeyException from a manual delete
-            // racing with Camel's internal post-processing delete.
-            .append("&deleteAfterRead=true")
+            // deleteAfterRead=false — Camel never touches the object. The route owns the
+            // full lifecycle: copy to Archive/Error prefix, then delete the source. Combined
+            // with synchronous polling (no .threads() in the route) this guarantees each
+            // object is processed exactly once and the source still exists at archive time.
+            .append("&deleteAfterRead=false")
             .append("&moveAfterRead=false")
             .append("&includeBody=true")               // stream file content into exchange body
             .append("&autocloseBody=false")            // ProfileReadsCsvProcessor closes stream via try-with-resources

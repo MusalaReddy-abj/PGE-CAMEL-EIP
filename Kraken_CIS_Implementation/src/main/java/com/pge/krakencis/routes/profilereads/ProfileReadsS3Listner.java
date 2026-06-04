@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 /**
@@ -97,7 +98,10 @@ public class ProfileReadsS3Listner extends BaseRoute {
         from(s3Properties.buildUri())
             .routeId("route-profile-reads-s3")
             .description("Poll ProfileReads CSV files from S3, parse each row, publish to Kafka")
-            .threads(s3Properties.getThreadPoolSize())
+            // No .threads() — process each polled object synchronously on the consumer
+            // thread. This prevents a later poll cycle from picking up the same object
+            // while a large file is still being processed (which caused the same file to
+            // be published to Kafka twice and a NoSuchKey 404 when both tried to archive).
             .process(correlationIdProcessor)
             .choice()
                 // Only .csv files (case-insensitive) are processed.
@@ -138,7 +142,7 @@ public class ProfileReadsS3Listner extends BaseRoute {
         String archiveKey = s3Properties.getArchivePrefix() + fileName;
 
         try {
-            copyToDestination(bucket, sourceKey, archiveKey);
+            copyAndDelete(bucket, sourceKey, archiveKey);
             log.info("s3FileArchived", cid,
                 "bucket", bucket, "sourceKey", sourceKey, "archiveKey", archiveKey);
         } catch (Exception e) {
@@ -169,7 +173,7 @@ public class ProfileReadsS3Listner extends BaseRoute {
         String errorKey  = s3Properties.getErrorPrefix() + fileName;
 
         try {
-            copyToDestination(bucket, sourceKey, errorKey);
+            copyAndDelete(bucket, sourceKey, errorKey);
             log.info("s3CorruptedFileMovedToError", correlationId,
                 "bucket", bucket, "sourceKey", sourceKey, "errorKey", errorKey);
         } catch (Exception e) {
@@ -213,14 +217,17 @@ public class ProfileReadsS3Listner extends BaseRoute {
             .send("direct:publishProfileReadsAudit", exchange);
     }
 
-    // Only copy — no manual delete. deleteAfterRead=true in the S3 URI means
-    // Camel deletes the source object after the exchange completes. Doing our
-    // own delete was causing NoSuchKeyException when Camel's internal cleanup
-    // also tried to delete the same key.
-    private void copyToDestination(String bucket, String sourceKey, String destKey) {
+    // Copy to destination, then delete the source. deleteAfterRead=false in the
+    // S3 URI means Camel never touches the object, so we own the full lifecycle.
+    // Synchronous polling (no .threads()) guarantees the source still exists here.
+    private void copyAndDelete(String bucket, String sourceKey, String destKey) {
         s3Client.copyObject(CopyObjectRequest.builder()
             .sourceBucket(bucket).sourceKey(sourceKey)
             .destinationBucket(bucket).destinationKey(destKey)
+            .build());
+
+        s3Client.deleteObject(DeleteObjectRequest.builder()
+            .bucket(bucket).key(sourceKey)
             .build());
     }
 
@@ -235,7 +242,7 @@ public class ProfileReadsS3Listner extends BaseRoute {
         String errorKey  = s3Properties.getErrorPrefix() + fileName;
 
         try {
-            copyToDestination(bucket, sourceKey, errorKey);
+            copyAndDelete(bucket, sourceKey, errorKey);
             log.info("s3UnsupportedFileMoved", cid,
                 "bucket", bucket, "sourceKey", sourceKey, "errorKey", errorKey);
         } catch (Exception e) {
