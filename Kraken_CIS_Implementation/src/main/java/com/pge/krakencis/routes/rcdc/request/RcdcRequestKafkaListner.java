@@ -1,6 +1,7 @@
 package com.pge.krakencis.routes.rcdc.request;
 
 import com.pge.krakencis.logging.LogConstants;
+import com.pge.krakencis.logging.SpanEnricher;
 import com.pge.krakencis.logging.RouteLoggingProcessor;
 import com.pge.krakencis.processors.CorrelationIdProcessor;
 import com.pge.krakencis.processors.RouteExceptionProcessor;
@@ -73,7 +74,7 @@ public class RcdcRequestKafkaListner extends BaseKafkaConsumerRoute {
         configureKafkaErrorHandlers(route, rcdcRetryTopic, rcdcDlqTopic, SERVICE_NAME);
 
         route
-            .process(com.pge.krakencis.logging.SpanEnricher.kafkaConsume())
+            .process(SpanEnricher.kafkaConsume())
             .process(exchange -> exchange.setProperty(
                 LogConstants.PROP_ORIGINAL_BODY, exchange.getIn().getBody(String.class)))
             .process(exchange -> extractCorrelationId(exchange, "rcdcMessageConsumed"))
