@@ -4,7 +4,6 @@ import com.pge.krakencis.configs.ProfileReadsS3Properties;
 import com.pge.krakencis.exceptions.TransformationException;
 import com.pge.krakencis.exceptions.ValidationException;
 import com.pge.krakencis.logging.LogConstants;
-import com.pge.krakencis.logging.ObservationSpan;
 import com.pge.krakencis.logging.RouteLoggingProcessor;
 import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.processors.CorrelationIdProcessor;
@@ -65,7 +64,6 @@ public class ProfileReadsS3Listner extends BaseRoute {
     private final ProfileReadsCsvProcessor  profileReadsCsvProcessor;
     private final ProfileReadsS3Properties  s3Properties;
     private final S3Client                  s3Client;
-    private final ObservationSpan observationSpan;
 
     @Value("${kafka.topic.profile-reads:kraken-profile-reads-events}")
     private String profileReadsTopic;
@@ -75,13 +73,11 @@ public class ProfileReadsS3Listner extends BaseRoute {
                                   RouteExceptionProcessor  exceptionProcessor,
                                   ProfileReadsCsvProcessor profileReadsCsvProcessor,
                                   ProfileReadsS3Properties s3Properties,
-                                  S3Client                 s3Client,
-                                  ObservationSpan observationSpan) {
+                                  S3Client                 s3Client) {
         super(correlationIdProcessor, routeLoggingProcessor, exceptionProcessor);
         this.profileReadsCsvProcessor = profileReadsCsvProcessor;
         this.s3Properties             = s3Properties;
         this.s3Client                 = s3Client;
-        this.observationSpan          = observationSpan;
     }
 
     /** Creates the source-prefix placeholder once at startup so the folder is visible immediately. */
@@ -111,13 +107,13 @@ public class ProfileReadsS3Listner extends BaseRoute {
                 // Only .csv files (case-insensitive) are processed.
                 .when(header(HDR_KEY).regex("(?i).*\\.csv"))
                     .process(routeLoggingProcessor.entry(OPERATION))
-                    .process(observationSpan.wrap("profileReads.parseCsv", profileReadsCsvProcessor))
+                    .process(profileReadsCsvProcessor)
                     .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsTopic))
                     .to("direct:publishToKafka")
                     .to("direct:publishProfileReadsDlq")
                     .setProperty("profileReads.source", constant("S3"))
                     .to("direct:publishProfileReadsAudit")
-                    .process(observationSpan.wrap("profileReads.archive", this::moveToArchive))
+                    .process(this::moveToArchive)
                     .process(routeLoggingProcessor.exit(OPERATION))
                 // .keep placeholder: silently complete — stays in place, folder remains visible.
                 .when(header(HDR_KEY).endsWith(".keep"))
