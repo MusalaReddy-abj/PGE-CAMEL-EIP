@@ -165,7 +165,16 @@ public class ProfileReadsCsvProcessor extends BaseProcessor {
                 }
             }
 
-            if (dataRowsSeen > 0 && currentBatch.isEmpty() && intermediateBatches == 0) {
+            // No data rows at all (header-only / empty / unreadable stream). Without this
+            // guard the file would be "successfully" archived having published nothing —
+            // i.e. moved to Archive but not processed. Treat it as a failure so it is
+            // visible (CORRUPTED audit + moved to Error) instead of silently archived.
+            if (dataRowsSeen == 0) {
+                throw ValidationException.missingField(
+                    "CSV data rows (file has a header but no data rows)", correlationId);
+            }
+
+            if (currentBatch.isEmpty() && intermediateBatches == 0) {
                 throw ValidationException.missingField(
                     "parseable CSV rows (all " + dataRowsSeen + " rows failed)", correlationId);
             }
