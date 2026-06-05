@@ -86,6 +86,11 @@ camel:
     stream-caching-spool-threshold: 104857600   # 100 MB
   main:
     auto-startup: true
+  # Camel OpenTelemetry — wraps each route and processor in an OTel span so a trace
+  # shows the full Camel pipeline, not just the single inbound HTTP span.
+  opentelemetry:
+    enabled: true
+    service-name: kraken-cis
   # Global Kafka security defaults — applied to ALL Camel Kafka endpoints
   # (both producer toD() and every consumer route URI).
   # Must be under camel.component.kafka.configuration.* — not directly under
@@ -109,6 +114,19 @@ management:
   tracing:
     sampling:
       probability: 1.0     # 100% in dev/test — reduce to 0.1 in prod
+  # Pin service.name on every span (else it defaults to spring.application.name).
+  opentelemetry:
+    resource-attributes:
+      service.name: kraken-cis
+      service.namespace: pge
+      deployment.environment: ${ENVIRONMENT:dev}
+  # OTLP exporter → OTel Collector (HTTP/protobuf receiver on port 4318).
+  # Defaults to the in-cluster collector (the same one Kong exports to). Reachable
+  # only from inside the cluster; for local dev set OTEL_EXPORTER_OTLP_ENDPOINT
+  # to your local collector, e.g. http://localhost:4318.
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://otel-collector.observability.svc.cluster.local:4318}/v1/traces
 
   endpoints:
     web:
@@ -130,6 +148,9 @@ logging:
   level:
     com.pge.krakencis: DEBUG
     org.apache.camel: INFO
+    # Silence OTLP span-export connection errors when no collector is reachable
+    # (e.g. local dev). Span creation / MDC tracing is unaffected.
+    io.opentelemetry.exporter.internal: "off"
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
