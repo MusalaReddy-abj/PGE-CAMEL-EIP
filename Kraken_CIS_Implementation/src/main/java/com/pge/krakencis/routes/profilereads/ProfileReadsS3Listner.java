@@ -124,17 +124,15 @@ public class ProfileReadsS3Listner extends BaseRoute {
                 // and produced spurious "unsupported file" → Error moves every poll.
                 .when(header(HDR_KEY).endsWith("/"))
                     .stop()
-                // All other file types (.txt, .xml, etc.): log and move to error prefix
-                // so they are not picked up again on the next poll cycle.
+                // Any other file type (not .csv): skip entirely — do NOT parse, do NOT
+                // publish an audit record, do NOT move. The object is left untouched in
+                // the source prefix and simply ignored on every poll.
                 .otherwise()
-                    .process(exchange -> {
-                        String key = exchange.getIn().getHeader(HDR_KEY, String.class);
-                        String cid = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
-                        log.warn("s3UnsupportedFileTypeSkipped", cid,
-                            "s3Key", key, "errorPrefix", s3Properties.getErrorPrefix(),
-                            "hint", "Only .csv files are processed from this prefix");
-                        moveUnsupportedFile(exchange);
-                    })
+                    .process(exchange -> log.debug("s3NonCsvSkipped",
+                        exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                        "s3Key", exchange.getIn().getHeader(HDR_KEY, String.class),
+                        "reason", "only .csv files are processed"))
+                    .stop()
             .end();
     }
 
@@ -235,26 +233,6 @@ public class ProfileReadsS3Listner extends BaseRoute {
         s3Client.deleteObject(DeleteObjectRequest.builder()
             .bucket(bucket).key(sourceKey)
             .build());
-    }
-
-    private void moveUnsupportedFile(Exchange exchange) {
-        String bucket    = exchange.getIn().getHeader(HDR_BUCKET, String.class);
-        String sourceKey = exchange.getIn().getHeader(HDR_KEY,    String.class);
-        String cid       = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
-
-        if (bucket == null || sourceKey == null) return;
-
-        String fileName  = fileNameFrom(sourceKey);
-        String errorKey  = s3Properties.getErrorPrefix() + fileName;
-
-        try {
-            copyAndDelete(bucket, sourceKey, errorKey);
-            log.info("s3UnsupportedFileMoved", cid,
-                "bucket", bucket, "sourceKey", sourceKey, "errorKey", errorKey);
-        } catch (Exception e) {
-            log.error("s3UnsupportedFileMoveFailed", cid, e,
-                "bucket", bucket, "sourceKey", sourceKey);
-        }
     }
 
     private void recreateSourceFolder(String bucket) {
