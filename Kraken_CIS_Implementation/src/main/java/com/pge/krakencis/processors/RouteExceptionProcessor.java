@@ -1,10 +1,12 @@
 package com.pge.krakencis.processors;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pge.krakencis.exceptions.KrakenBaseException;
 import com.pge.krakencis.exceptions.TransformationException;
 import com.pge.krakencis.exceptions.ValidationException;
 import com.pge.krakencis.logging.AuditLogger;
 import com.pge.krakencis.logging.LogConstants;
+import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.models.ErrorResponse;
 import org.apache.camel.Exchange;
 import org.apache.camel.Processor;
@@ -42,10 +44,14 @@ import java.util.Map;
 @Component
 public class RouteExceptionProcessor {
 
-    private final AuditLogger auditLogger;
+    private static final StructuredLogger log = StructuredLogger.of(RouteExceptionProcessor.class);
 
-    public RouteExceptionProcessor(AuditLogger auditLogger) {
-        this.auditLogger = auditLogger;
+    private final AuditLogger  auditLogger;
+    private final ObjectMapper objectMapper;
+
+    public RouteExceptionProcessor(AuditLogger auditLogger, ObjectMapper objectMapper) {
+        this.auditLogger  = auditLogger;
+        this.objectMapper = objectMapper;
     }
 
     // ── Exception-type handlers ───────────────────────────────────────────────
@@ -126,7 +132,22 @@ public class RouteExceptionProcessor {
             .detail(detail)
             .build();
 
-        exchange.getIn().setBody(errorResponse);
+        // Marshal to a JSON String here. The XML routes (/rcdc, /odr) use
+        // bindingMode=off, so there is no REST data-format to convert an ErrorResponse
+        // object into bytes — Undertow would fail with NoTypeConversionAvailableException
+        // (ErrorResponse → ByteBuffer). Serialising to a String makes the error body
+        // sendable on every route regardless of binding mode.
+        String body;
+        try {
+            body = objectMapper.writeValueAsString(errorResponse);
+        } catch (Exception e) {
+            log.warn("errorResponseSerializeFailed", correlationId, "error", e.getMessage());
+            body = "{\"status\":" + httpStatus + ",\"errorCode\":\"" + code
+                + "\",\"message\":\"" + (message != null ? message.replace("\"", "'") : "")
+                + "\",\"correlationId\":\"" + correlationId + "\"}";
+        }
+
+        exchange.getIn().setBody(body);
         exchange.getIn().setHeader(Exchange.HTTP_RESPONSE_CODE, httpStatus);
         exchange.getIn().setHeader(Exchange.CONTENT_TYPE, "application/json");
     }
