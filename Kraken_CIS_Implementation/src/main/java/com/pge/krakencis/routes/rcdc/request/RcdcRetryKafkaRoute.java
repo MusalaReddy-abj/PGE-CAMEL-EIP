@@ -2,7 +2,6 @@ package com.pge.krakencis.routes.rcdc.request;
 
 import com.pge.krakencis.exceptions.RetryQueueExhaustedException;
 import com.pge.krakencis.logging.LogConstants;
-import com.pge.krakencis.logging.SpanEnricher;
 import com.pge.krakencis.logging.RouteLoggingProcessor;
 import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.processors.CorrelationIdProcessor;
@@ -107,7 +106,7 @@ public class RcdcRetryKafkaRoute extends BaseKafkaConsumerRoute {
         configureRetryQueueErrorHandlers(route, rcdcRetryTopic, rcdcDlqTopic, SERVICE_NAME);
 
         route
-            .process(SpanEnricher.kafkaConsume())
+            .process(com.pge.krakencis.logging.SpanEnricher.kafkaConsume())
             .process(exchange -> exchange.setProperty(
                 LogConstants.PROP_ORIGINAL_BODY, exchange.getIn().getBody(String.class)))
             .process(this::extractCorrelationIdFromRetry)
