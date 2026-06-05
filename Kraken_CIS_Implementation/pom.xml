@@ -167,12 +167,15 @@
             <artifactId>micrometer-tracing-bridge-otel</artifactId>
         </dependency>
 
-        <!-- Camel OpenTelemetry — instruments every Camel route/processor with an OTel
-             span, so a trace shows the full pipeline (route → processors → publish),
-             not just the single inbound HTTP span from the Micrometer bridge. -->
+        <!-- Camel Observation — instruments every Camel route/processor via the SAME
+             Micrometer Observation API that Spring Boot / micrometer-tracing-bridge-otel
+             use. This unifies trace context, so Camel spans nest correctly under the
+             inbound HTTP span into ONE connected trace. (Do NOT also use
+             camel-opentelemetry-starter — running both creates duplicate, disconnected
+             spans.) -->
         <dependency>
             <groupId>org.apache.camel.springboot</groupId>
-            <artifactId>camel-opentelemetry-starter</artifactId>
+            <artifactId>camel-observation-starter</artifactId>
         </dependency>
 
         <!-- OTLP exporter — ships spans to the OTel Collector (then Tempo/Jaeger).
