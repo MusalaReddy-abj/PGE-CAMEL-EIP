@@ -87,11 +87,9 @@ camel:
     stream-caching-spool-threshold: 104857600   # 100 MB
   main:
     auto-startup: true
-  # Camel OpenTelemetry — wraps each route and processor in an OTel span so a trace
-  # shows the full Camel pipeline, not just the single inbound HTTP span.
-  opentelemetry:
-    enabled: true
-    service-name: kraken-cis
+  # Camel Observation (camel-observation-starter) auto-instruments routes/processors via
+  # the Micrometer Observation API — no extra config needed. It shares trace context with
+  # Spring's HTTP instrumentation so all spans nest into one connected trace.
   # Global Kafka security defaults — applied to ALL Camel Kafka endpoints
   # (both producer toD() and every consumer route URI).
   # Must be under camel.component.kafka.configuration.* — not directly under
