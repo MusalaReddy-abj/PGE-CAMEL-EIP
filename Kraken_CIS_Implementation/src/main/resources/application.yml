@@ -53,7 +53,7 @@ external-services:
       timeout: 30000
       content-type: "text/xml; charset=utf-8"
     odr-mock:
-      url: http://k8s-kong-kongprox-9acef1f816-46ee569626f12d48.elb.ap-south-2.amazonaws.com/ondemandread
+      url: http://k8s-kong-kongprox-9acef1f816-46ee569626f12d48.elb.ap-south-2.amazonaws.com/mockondemandread
       timeout: 30000
       content-type: "text/xml; charset=utf-8"
 
