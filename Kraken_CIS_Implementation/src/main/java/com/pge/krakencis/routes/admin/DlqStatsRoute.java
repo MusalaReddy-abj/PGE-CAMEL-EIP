@@ -1,6 +1,7 @@
 package com.pge.krakencis.routes.admin;
 
 import com.pge.krakencis.logging.StructuredLogger;
+import com.pge.krakencis.logging.SpanEnricher;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import org.apache.camel.Exchange;
@@ -138,7 +139,7 @@ public class DlqStatsRoute extends RouteBuilder {
 
         from("direct:dlq-stats")
             .routeId("route-dlq-stats")
-            .process(com.pge.krakencis.logging.SpanEnricher.httpRoute("GET", "/api/v1/admin/dlq/stats"))
+            .process(SpanEnricher.httpRoute("GET", "/api/v1/admin/dlq/stats"))
             .process(this::buildDlqStats);
     }
 
