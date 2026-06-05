@@ -63,6 +63,7 @@ public class DlqReplayRoute extends RouteBuilder {
     private static final Duration POLL_TIMEOUT = Duration.ofSeconds(5);
 
     @Value("${dlq.replay.interval-ms:1800000}")        private long intervalMs;
+    @Value("${dlq.replay.initial-delay-ms:30000}")     private long initialDelayMs;
     @Value("${dlq.replay.max-messages-per-run:100}")   private int  maxPerRun;
     @Value("${dlq.replay.max-replays:3}")              private int  maxReplays;
 
@@ -87,13 +88,17 @@ public class DlqReplayRoute extends RouteBuilder {
 
     @Override
     public void configure() {
-        // delay=intervalMs so it does not fire immediately on startup.
-        from("timer:dlq-replay?period=" + intervalMs + "&delay=" + intervalMs)
+        // First run after initialDelayMs (default 30 s), then every intervalMs.
+        log.info("dlqReplayRouteStarting", null,
+            "initialDelayMs", initialDelayMs, "intervalMs", intervalMs, "maxPerRun", maxPerRun);
+        from("timer:dlq-replay?period=" + intervalMs + "&delay=" + initialDelayMs)
             .routeId("route-dlq-replay")
             .process(this::replayAllDlqs);
     }
 
     private void replayAllDlqs(Exchange exchange) {
+        // Heartbeat — proves the scheduler is alive even when all DLQs are empty.
+        log.info("dlqReplayTick", null, "maxPerRun", maxPerRun, "maxReplays", maxReplays);
         // RCDC and HES DLQs are message-level (original message preserved) → replayable.
         replayDlq(rcdcDlq, rcdcSource, rcdcParking, true);
         replayDlq(hesDlq,  hesSource,  hesParking,  true);

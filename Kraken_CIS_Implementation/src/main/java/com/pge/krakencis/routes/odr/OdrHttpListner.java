@@ -50,6 +50,7 @@ public class OdrHttpListner extends BaseRoute {
 
         processingRoute("direct:process-odr", "route-post-odr", OPERATION, route ->
             route
+                .process(com.pge.krakencis.logging.SpanEnricher.httpRoute("POST", "/api/v1/odr"))
                 .setProperty("odr.rawXml", simple("${body}"))  // preserve full SOAP envelope for mock forwarding
                 .process(soapEnvelopeExtractorProcessor)         // strip envelope → body becomes requestMessage
                 .unmarshal(jaxbFormat)
