@@ -2,7 +2,6 @@ package com.pge.krakencis.routes.alarms;
 
 import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.RouteLoggingProcessor;
-import com.pge.krakencis.logging.SpanEnricher;
 import com.pge.krakencis.models.alarms.AlarmRequest;
 import com.pge.krakencis.processors.CorrelationIdProcessor;
 import com.pge.krakencis.processors.RouteExceptionProcessor;
@@ -57,7 +56,6 @@ public class AlarmHttpListner extends BaseRoute {
 
         processingRoute("direct:process-alarms", "route-post-alarms", OPERATION, route ->
             route
-                .process(SpanEnricher.httpRoute("POST", "/api/v1/alarms"))
                 .process(alarmEventProcessor)
                 .setProperty(LogConstants.KAFKA_TOPIC, constant(alarmsTopic))
                 .to("direct:publishToKafka")

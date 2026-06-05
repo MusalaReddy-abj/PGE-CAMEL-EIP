@@ -13,7 +13,9 @@ info:
     | Alarm Events | `POST /alarms` | → Kafka `kraken-alarm-events` |
     | RCDC Command | `POST /rcdc` | → Kafka `kraken-rcdc-events` → SOA-RCDC HTTP |
     | RCDC HES Response | `POST /rcdc/response` | → Kafka `kraken-rcdc-hes-response-events` → MDM SOAP |
-    | Profile Reads | FTP poll (CSV) | → Kafka `kraken-profile-reads-events` |
+    | On-Demand Read | `POST /odr` | *synchronous* → SOA-ODR SOAP (no Kafka) |
+    | Profile Reads | FTP / S3 poll (CSV) | → Kafka `kraken-profile-reads-events` (+ DLQ + audit) |
+    | DLQ visibility | `GET /admin/dlq/stats` | reads consumer-group lag per DLQ / parking topic |
 
     ## Error Response Structure
 
@@ -53,10 +55,16 @@ info:
     treated as HTTP 500 (retryable). SOAP `soap:Client` / `env:Sender` faults are treated as
     HTTP 400 (DLQ immediately).
 
-    | Flow | Retry topic | DLQ topic |
-    |------|------------|-----------|
-    | RCDC Command → SOA-RCDC | `kraken-rcdc-retry-events` | `kraken-rcdc-dlq-events` |
-    | HES Response → MDM SOAP | `kraken-rcdc-hes-retry-events` | `kraken-rcdc-hes-dlq-events` |
+    | Flow | Retry topic | DLQ topic | Parking topic |
+    |------|------------|-----------|---------------|
+    | RCDC Command → SOA-RCDC | `kraken-rcdc-retry-events` | `kraken-rcdc-dlq-events` | `kraken-rcdc-parking-events` |
+    | HES Response → MDM SOAP | `kraken-rcdc-hes-retry-events` | `kraken-rcdc-hes-dlq-events` | `kraken-rcdc-hes-parking-events` |
+
+    **Automatic DLQ replay (opt-in, `dlq.replay.enabled`):** a scheduled job re-drives
+    *transient*-failure DLQ messages back to their source topic (capped by
+    `X-Replay-Count`); *permanent* errors and exhausted replays are moved to the
+    `*-parking` topic for manual review. Lag for both DLQ and parking topics is exposed
+    via `GET /admin/dlq/stats` and the `kafka_dlq_lag` Prometheus gauge.
 
     **DLQ / retry message format:** The Kafka record body is the **original message unchanged**.
     Error context is attached as Kafka record headers:
@@ -83,14 +91,20 @@ info:
     name: PGE Integration Team
 
 servers:
-  - url: http://localhost:9080/api/v1
-    description: Local / Dev
+  - url: http://localhost:8122/api/v1
+    description: Local / Dev (direct to app — Camel REST port)
+  - url: http://localhost:8000
+    description: Via Kong API Gateway (requires JWT Bearer token)
 
 tags:
   - name: Alarms
     description: Alarm event ingestion from Kraken CIS
   - name: RCDC
     description: Remote Connect / Disconnect Command flows (inbound command + HES response)
+  - name: ODR
+    description: On-Demand Read — synchronous SOAP proxy to the SOA-ODR service
+  - name: Admin
+    description: Operational endpoints (DLQ visibility)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PATHS
@@ -375,6 +389,96 @@ paths:
           $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ── On-Demand Read (Inbound, synchronous SOAP proxy) ─────────────────────────
+  /odr:
+    post:
+      operationId: receiveOnDemandRead
+      summary: Submit an On-Demand Read (synchronous)
+      description: |
+        Accepts an XML On-Demand Read (ODR) SOAP request, forwards it to the SOA-ODR
+        service, and returns the downstream SOAP response **synchronously** — unlike the
+        other flows there is no Kafka hop. The original SOAP envelope is preserved and
+        forwarded as-is after envelope extraction/validation.
+
+        **Camel Route:** `route-post-odr`
+      tags:
+        - ODR
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema:
+              type: string
+              format: xml
+            example: |
+              <?xml version="1.0" encoding="UTF-8"?>
+              <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+                <soapenv:Header/>
+                <soapenv:Body>
+                  <requestMessage xmlns="http://xmlns.oracle.com/ouaf/iec">
+                    <header>
+                      <verb>Get</verb>
+                      <noun>OnDemandRead</noun>
+                      <correlationID>3fa85f64-5717-4562-b3fc-2c963f66afa6</correlationID>
+                    </header>
+                    <payLoad>
+                      <endDeviceAsset>
+                        <mRID>1.21.120.0.0.0.0.0.0.0.0.0.0.0.0.0.0.4097</mRID>
+                      </endDeviceAsset>
+                    </payLoad>
+                  </requestMessage>
+                </soapenv:Body>
+              </soapenv:Envelope>
+      responses:
+        '200':
+          description: SOAP response from the SOA-ODR service (forwarded synchronously)
+          content:
+            application/xml:
+              schema:
+                type: string
+                format: xml
+        '400':
+          $ref: '#/components/responses/BadRequestXml'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityXml'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableXml'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ── DLQ Visibility (Admin) ───────────────────────────────────────────────────
+  /admin/dlq/stats:
+    get:
+      operationId: getDlqStats
+      summary: DLQ / parking message-lag summary
+      description: |
+        Returns the un-inspected message lag for every Dead-Letter and parking topic,
+        computed as `latestOffset - committedOffset` for the `kraken-dlq-monitor`
+        consumer group. A non-zero lag indicates messages awaiting inspection / replay.
+        Also surfaced as the `kafka_dlq_lag{topic="…"}` Prometheus gauge.
+
+        **Camel Route:** `route-dlq-stats`
+      tags:
+        - Admin
+      responses:
+        '200':
+          description: Per-topic lag summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DlqStatsResponse'
+              example:
+                topics:
+                  - topic: kraken-rcdc-dlq-events
+                    consumerGroup: kraken-dlq-monitor
+                    lag: 0
+                  - topic: kraken-rcdc-parking-events
+                    consumerGroup: kraken-dlq-monitor
+                    lag: 2
+                checkedAt: "2025-12-18T10:00:00+05:30"
         '500':
           $ref: '#/components/responses/InternalServerError'
 
@@ -758,6 +862,31 @@ components:
           format: date-time
           example: "2025-12-18T10:00:00+05:30"
 
+    # ── DLQ Stats ──────────────────────────────────────────────────────────────
+    DlqStatsResponse:
+      type: object
+      properties:
+        topics:
+          type: array
+          items:
+            type: object
+            properties:
+              topic:
+                type: string
+                example: kraken-rcdc-dlq-events
+              consumerGroup:
+                type: string
+                example: kraken-dlq-monitor
+              lag:
+                type: integer
+                format: int64
+                description: Un-inspected messages (latestOffset − committedOffset)
+                example: 0
+        checkedAt:
+          type: string
+          format: date-time
+          example: "2025-12-18T10:00:00+05:30"
+
   # ── Reusable Responses ───────────────────────────────────────────────────────
   responses:
 
@@ -855,4 +984,10 @@ components:
             $ref: '#/components/schemas/ErrorResponseXml'
 
   # ── Security (add auth scheme when implemented) ──────────────────────────────
-  securitySchemes: {}
+  securitySchemes:
+    # Applied at the Kong gateway (HS256 JWT). Direct-to-app calls (port 8122) are
+    # unauthenticated in dev. Send as: Authorization: Bearer <token>
+    jwtBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

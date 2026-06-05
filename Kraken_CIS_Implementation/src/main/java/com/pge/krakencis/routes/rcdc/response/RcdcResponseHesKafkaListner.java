@@ -70,7 +70,6 @@ public class RcdcResponseHesKafkaListner extends BaseKafkaConsumerRoute {
         configureKafkaErrorHandlers(route, hesRetryTopic, hesDlqTopic, SERVICE_NAME);
 
         route
-            .process(com.pge.krakencis.logging.SpanEnricher.kafkaConsume())
             .process(exchange -> exchange.setProperty(
                 LogConstants.PROP_ORIGINAL_BODY, exchange.getIn().getBody(String.class)))
             .process(exchange -> extractCorrelationId(exchange, "rcdcHesMessageConsumed"))

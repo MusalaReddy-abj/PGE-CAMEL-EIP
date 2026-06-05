@@ -39,9 +39,12 @@ kafka:
     rcdc:               kraken-rcdc-events
     rcdc-retry:         kraken-rcdc-retry-events
     rcdc-dlq:           kraken-rcdc-dlq-events
+    rcdc-parking:       kraken-rcdc-parking-events
     rcdc-hes-response:  kraken-rcdc-hes-response-events
     rcdc-hes-retry:     kraken-rcdc-hes-retry-events
     rcdc-hes-dlq:       kraken-rcdc-hes-dlq-events
-    profile-reads:       kraken-profile-reads-events
-    profile-reads-dlq:   kraken-profile-reads-dlq-events
-    profile-reads-audit: kraken-profile-reads-audit-events
+    rcdc-hes-parking:   kraken-rcdc-hes-parking-events
+    profile-reads:         kraken-profile-reads-events
+    profile-reads-dlq:     kraken-profile-reads-dlq-events
+    profile-reads-parking: kraken-profile-reads-parking-events
+    profile-reads-audit:   kraken-profile-reads-audit-events

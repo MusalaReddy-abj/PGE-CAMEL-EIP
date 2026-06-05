@@ -82,12 +82,25 @@ public class DlqStatsRoute extends RouteBuilder {
     @Value("${kafka.topic.profile-reads-dlq:kraken-profile-reads-dlq-events}")
     private String profileReadsDlqTopic;
 
+    // Parking topics — the terminal home for un-replayable messages (DlqReplayRoute).
+    @Value("${kafka.topic.rcdc-parking:kraken-rcdc-parking-events}")
+    private String rcdcParkingTopic;
+
+    @Value("${kafka.topic.rcdc-hes-parking:kraken-rcdc-hes-parking-events}")
+    private String rcdcHesParkingTopic;
+
+    @Value("${kafka.topic.profile-reads-parking:kraken-profile-reads-parking-events}")
+    private String profileReadsParkingTopic;
+
     private final MeterRegistry meterRegistry;
 
-    // AtomicLong per DLQ topic — updated after every /stats call, read by Prometheus scrapes.
+    // AtomicLong per DLQ / parking topic — updated after every /stats call, read by Prometheus scrapes.
     private final AtomicLong rcdcDlqLag        = new AtomicLong(0);
     private final AtomicLong rcdcHesDlqLag     = new AtomicLong(0);
     private final AtomicLong profileReadsDlqLag = new AtomicLong(0);
+    private final AtomicLong rcdcParkingLag        = new AtomicLong(0);
+    private final AtomicLong rcdcHesParkingLag     = new AtomicLong(0);
+    private final AtomicLong profileReadsParkingLag = new AtomicLong(0);
 
     public DlqStatsRoute(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
@@ -104,6 +117,12 @@ public class DlqStatsRoute extends RouteBuilder {
         meterRegistry.gauge(METRIC_DLQ_LAG,
             Tags.of("topic", profileReadsDlqTopic.isEmpty() ? "kraken-profile-reads-dlq-events" : profileReadsDlqTopic),
             profileReadsDlqLag, AtomicLong::get);
+        meterRegistry.gauge(METRIC_DLQ_LAG,
+            Tags.of("topic", rcdcParkingTopic), rcdcParkingLag, AtomicLong::get);
+        meterRegistry.gauge(METRIC_DLQ_LAG,
+            Tags.of("topic", rcdcHesParkingTopic), rcdcHesParkingLag, AtomicLong::get);
+        meterRegistry.gauge(METRIC_DLQ_LAG,
+            Tags.of("topic", profileReadsParkingTopic), profileReadsParkingLag, AtomicLong::get);
     }
 
     @Override
@@ -119,12 +138,13 @@ public class DlqStatsRoute extends RouteBuilder {
 
         from("direct:dlq-stats")
             .routeId("route-dlq-stats")
-            .process(com.pge.krakencis.logging.SpanEnricher.httpRoute("GET", "/api/v1/admin/dlq/stats"))
             .process(this::buildDlqStats);
     }
 
     private void buildDlqStats(Exchange exchange) {
-        List<String> topics = List.of(rcdcDlqTopic, rcdcHesDlqTopic, profileReadsDlqTopic);
+        List<String> topics = List.of(
+            rcdcDlqTopic, rcdcHesDlqTopic, profileReadsDlqTopic,
+            rcdcParkingTopic, rcdcHesParkingTopic, profileReadsParkingTopic);
 
         Properties props = new Properties();
         props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,      bootstrapServers);
@@ -212,9 +232,12 @@ public class DlqStatsRoute extends RouteBuilder {
     }
 
     private void updateLagGauge(String topic, long lag) {
-        if (topic.equals(rcdcDlqTopic))         rcdcDlqLag.set(lag);
-        else if (topic.equals(rcdcHesDlqTopic)) rcdcHesDlqLag.set(lag);
+        if (topic.equals(rcdcDlqTopic))              rcdcDlqLag.set(lag);
+        else if (topic.equals(rcdcHesDlqTopic))      rcdcHesDlqLag.set(lag);
         else if (topic.equals(profileReadsDlqTopic)) profileReadsDlqLag.set(lag);
+        else if (topic.equals(rcdcParkingTopic))         rcdcParkingLag.set(lag);
+        else if (topic.equals(rcdcHesParkingTopic))      rcdcHesParkingLag.set(lag);
+        else if (topic.equals(profileReadsParkingTopic)) profileReadsParkingLag.set(lag);
     }
 
     private static String esc(String v) {

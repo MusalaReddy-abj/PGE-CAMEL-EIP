@@ -1,372 +1,299 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Kong Gateway — Declarative Configuration
-# Format: Kong 3.x DB-less (kong.yml)
+# ═════════════════════════════════════════════════════════════════════════════
+# Kong Gateway — Declarative (DB-less) Configuration
+# Format: Kong 3.x   ·   apply with:  deck gateway sync kong.yml
+#         or mount as KONG_DECLARATIVE_CONFIG in a DB-less Kong deployment.
 #
-# TOPOLOGY
+# ROLE
+#   Kong is the single ingress/egress edge for the PGE Camel-EIP (Kraken CIS)
+#   integration. It terminates client calls, enforces auth/rate-limits/tracing,
+#   and proxies to either:
+#     • the integration app   (pge-camel-eip.default.svc.cluster.local)
+#     • the mock services      (pge-mock-services.default.svc.cluster.local)
+#     • the external SOA-RCDC SOAP backend (68.233.110.225:8000)
 #
-#   Inbound  (Kraken CIS → Kong :8000 → Our App :9080)
-#   ────────────────────────────────────────────────────
-#   POST /api/v1/alarms          → kraken-cis-upstream (:9080)
-#   POST /api/v1/rcdc            → kraken-cis-upstream (:9080)
-#   POST /api/v1/rcdc/response   → kraken-cis-upstream (:9080)
+# ROUTING SUMMARY  (client path  →  service  →  upstream path)
+#   POST /rcdc            → rcdc-request-main-service → app   /api/v1/rcdc
+#   POST /rcdcrequest     → rcdc-mock-request-service → mock  /api/v1/rcdcrequest
+#   POST /rcdcresponse    → rcdc-response-service     → app   /api/v1/rcdc/response
+#   POST|GET /rcdcswitchstatus → rcdc-soap-service    → SOAP  /soap/rcdc  (+?wsdl)
+#   POST /alarms         → alarms-service           → app   /api/v1/alarms
+#   POST /ondemandread   → ODR-service              → app   /api/v1/odr
 #
-#   Outbound (Our App → Kong :8000 → Downstream Services)
-#   ────────────────────────────────────────────────────
-#   POST /proxy/rcdc/command     → soa-rcdc-upstream  (:8082)
-#   POST /proxy/ws/RCDSwitchState→ soa-mdh-upstream   (:8083)
+# CROSS-CUTTING (global plugins, applied to every service/route below):
+#   opentelemetry · jwt · correlation-id · prometheus · rate-limiting · file-log
 #
-# For outbound proxying to work, update application.yml:
-#   external-services.services.rcdc.url:
-#       http://kong:8000/proxy/rcdc/command
-#   external-services.services.rcdc-mdm-notification.url:
-#       http://kong:8000/proxy/ws/RCDSwitchState
-# ─────────────────────────────────────────────────────────────────────────────
+# SECURITY NOTES
+#   • Inbound auth is JWT (HS256) verified by the global `jwt` plugin against the
+#     `external-consumer` credential. Each service then strips the inbound
+#     Authorization header before forwarding (the app/mocks don't need it).
+#   • The SOAP service instead INJECTS a Basic-Auth header for the SOA backend.
+#   • All secrets below (JWT secret, Basic-Auth) are committed for the demo —
+#     in real environments inject them via Kong vault refs / K8s secrets and
+#     ROTATE. Regenerate the base64 Basic-Auth string whenever creds change.
+# ═════════════════════════════════════════════════════════════════════════════
 _format_version: "3.0"
-_transform: true
 
-# ─────────────────────────────────────────────────────────────────────────────
-# UPSTREAMS  (load balancing + health checks for every target host)
-# ─────────────────────────────────────────────────────────────────────────────
-upstreams:
-
-  # Our Kraken CIS application
-  - name: kraken-cis-upstream
-    algorithm: round-robin
-    healthchecks:
-      active:
-        type: http
-        http_path: /actuator/health
-        healthy:
-          http_statuses: [200]
-          interval: 10
-          successes: 1
-        unhealthy:
-          http_statuses: [500, 503]
-          interval: 10
-          http_failures: 3
-    targets:
-      - target: localhost:9080
-        weight: 100
-
-  # SOA-RCDC downstream service
-  - name: soa-rcdc-upstream
-    algorithm: round-robin
-    healthchecks:
-      active:
-        type: tcp
-        healthy:
-          interval: 30
-          successes: 1
-        unhealthy:
-          interval: 30
-          tcp_failures: 3
-    targets:
-      - target: localhost:8082
-        weight: 100
-
-  # MDM SOAP notification service
-  - name: soa-mdm-upstream
-    algorithm: round-robin
-    healthchecks:
-      active:
-        type: tcp
-        healthy:
-          interval: 30
-          successes: 1
-        unhealthy:
-          interval: 30
-          tcp_failures: 3
-    targets:
-      - target: localhost:8083
-        weight: 100
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SERVICES + ROUTES
-# ─────────────────────────────────────────────────────────────────────────────
 services:
 
-  # ══════════════════════════════════════════════════════════════════════════
-  # INBOUND — Alarm Events
-  # POST /api/v1/alarms (application/json)
-  # ══════════════════════════════════════════════════════════════════════════
-  - name: kraken-cis-alarms
-    host: kraken-cis-upstream
+  # ───────────────────────────────────────────────────────────────────────────
+  # RCDC Command (inbound)  —  client POST /rcdc  →  app /api/v1/rcdc
+  # Remote Connect/Disconnect request. SOAP/XML payload, so XML content
+  # negotiation is forced on the forwarded call.
+  # ───────────────────────────────────────────────────────────────────────────
+  - name: rcdc-request-main-service
     protocol: http
-    connect_timeout: 10000
-    write_timeout: 30000
-    read_timeout: 30000
+    host: pge-camel-eip.default.svc.cluster.local
+    port: 80
+    path: /api/v1/rcdc
     routes:
-      - name: route-inbound-alarms
+      - name: rcdc-route
         paths:
-          - /api/v1/alarms
+          - /rcdc
         methods:
           - POST
-          - OPTIONS
-        strip_path: false
+        strip_path: true          # /rcdc is dropped; service `path` is used upstream
         preserve_host: false
         protocols:
           - http
           - https
     plugins:
-      # Ensure X-Correlation-ID is always present — generate one if missing
-      - name: correlation-id
-        config:
-          header_name: X-Correlation-ID
-          generator: uuid
-          echo_downstream: true
-
-      # Rate limit: prevent alarm floods from overwhelming Kafka
-      - name: rate-limiting
-        config:
-          minute: 500
-          hour: 10000
-          policy: local
-          limit_by: ip
-          error_code: 429
-          error_message: "Alarm rate limit exceeded. Retry after 1 minute."
-
-      # Reject payloads larger than 2 MB
-      - name: request-size-limiting
-        config:
-          allowed_payload_size: 2
-
-      # CORS for browser-based callers
-      - name: cors
-        config:
-          origins:
-            - "*"
-          methods:
-            - POST
-            - OPTIONS
-          headers:
-            - Content-Type
-            - Authorization
-            - X-Correlation-ID
-          exposed_headers:
-            - X-Correlation-ID
-          max_age: 3600
-          credentials: false
-
-      # Add security headers to every response
-      - name: response-transformer
-        config:
-          add:
-            headers:
-              - "X-Content-Type-Options:nosniff"
-              - "X-Frame-Options:DENY"
-
-  # ══════════════════════════════════════════════════════════════════════════
-  # INBOUND — RCDC Command
-  # POST /api/v1/rcdc (application/xml)
-  # ══════════════════════════════════════════════════════════════════════════
-  - name: kraken-cis-rcdc
-    host: kraken-cis-upstream
-    protocol: http
-    connect_timeout: 10000
-    write_timeout: 30000
-    read_timeout: 30000
-    routes:
-      - name: route-inbound-rcdc
-        paths:
-          - /api/v1/rcdc
-        methods:
-          - POST
-          - OPTIONS
-        strip_path: false
-        preserve_host: false
-        protocols:
-          - http
-          - https
-    plugins:
-      - name: correlation-id
-        config:
-          header_name: X-Correlation-ID
-          generator: uuid
-          echo_downstream: true
-
-      # RCDC commands are one-per-meter — 200/min is generous
-      - name: rate-limiting
-        config:
-          minute: 200
-          hour: 5000
-          policy: local
-          limit_by: ip
-          error_code: 429
-          error_message: "RCDC command rate limit exceeded."
-
-      # XML payloads should be small
-      - name: request-size-limiting
-        config:
-          allowed_payload_size: 1
-
-      - name: response-transformer
-        config:
-          add:
-            headers:
-              - "X-Content-Type-Options:nosniff"
-              - "X-Frame-Options:DENY"
-
-  # ══════════════════════════════════════════════════════════════════════════
-  # INBOUND — RCDC HES Response Callback
-  # POST /api/v1/rcdc/response (application/json)
-  # ══════════════════════════════════════════════════════════════════════════
-  - name: kraken-cis-rcdc-response
-    host: kraken-cis-upstream
-    protocol: http
-    connect_timeout: 10000
-    write_timeout: 30000
-    read_timeout: 30000
-    routes:
-      - name: route-inbound-rcdc-response
-        paths:
-          - /api/v1/rcdc/response
-        methods:
-          - POST
-          - OPTIONS
-        strip_path: false
-        preserve_host: false
-        protocols:
-          - http
-          - https
-    plugins:
-      - name: correlation-id
-        config:
-          header_name: X-Correlation-ID
-          generator: uuid
-          echo_downstream: true
-
-      - name: rate-limiting
-        config:
-          minute: 200
-          hour: 5000
-          policy: local
-          limit_by: ip
-          error_code: 429
-          error_message: "HES response rate limit exceeded."
-
-      - name: request-size-limiting
-        config:
-          allowed_payload_size: 1
-
-      - name: cors
-        config:
-          origins:
-            - "*"
-          methods:
-            - POST
-            - OPTIONS
-          headers:
-            - Content-Type
-            - Authorization
-            - X-Correlation-ID
-          exposed_headers:
-            - X-Correlation-ID
-          max_age: 3600
-
-      - name: response-transformer
-        config:
-          add:
-            headers:
-              - "X-Content-Type-Options:nosniff"
-              - "X-Frame-Options:DENY"
-
-  # ══════════════════════════════════════════════════════════════════════════
-  # OUTBOUND PROXY — SOA-RCDC Service
-  # Our app calls:  http://kong:8000/proxy/rcdc/command
-  # Kong forwards:  http://localhost:8082/api/rcdc/command
-  # ══════════════════════════════════════════════════════════════════════════
-  - name: soa-rcdc-service
-    host: soa-rcdc-upstream
-    protocol: http
-    connect_timeout: 10000
-    write_timeout: 30000   # matches application.yml rcdc.timeout
-    read_timeout: 30000
-    routes:
-      - name: route-outbound-rcdc-command
-        paths:
-          - /proxy/rcdc
-        methods:
-          - POST
-        strip_path: true          # strips /proxy/rcdc → forwards /command
-        preserve_host: false
-        protocols:
-          - http
-    plugins:
-      # Ensure correct Content-Type reaches SOA-RCDC
       - name: request-transformer
         config:
+          remove:
+            headers:
+              - Authorization      # app does not consume the inbound JWT
           add:
             headers:
-              - "Content-Type:application/json"
-          replace:
-            headers:
-              - "Content-Type:application/json"
+              - "Content-Type: application/xml"
+              - "Accept: application/xml"
 
-      # Propagate correlation ID downstream
-      - name: correlation-id
-        config:
-          header_name: X-Correlation-ID
-          generator: uuid
-          echo_downstream: false
-
-      # Protect SOA-RCDC from being flooded by our retry logic
-      - name: rate-limiting
-        config:
-          minute: 300
-          policy: local
-
-      # Cap outbound RCDC payload size — RCDC commands are small XML, reject anything
-      # unexpectedly large before it reaches the downstream service
-      - name: request-size-limiting
-        config:
-          allowed_payload_size: 1   # 1 MB
-
-  # ══════════════════════════════════════════════════════════════════════════
-  # OUTBOUND PROXY — MDM SOAP Notification Service
-  # Our app calls:  http://kong:8000/proxy/ws/RCDSwitchState
-  # Kong forwards:  http://localhost:8083/ws/RCDSwitchState
-  # ══════════════════════════════════════════════════════════════════════════
-  - name: soa-mdm-service
-    host: soa-mdm-upstream
+  # ───────────────────────────────────────────────────────────────────────────
+  # RCDC Mock Request (inbound)  —  client POST /rcdcrequest  →  mock /api/v1/rcdcrequest
+  # Hits the mock-services backend (test/demo double for the real SOA-RCDC).
+  # JSON content negotiation.
+  # ───────────────────────────────────────────────────────────────────────────
+  - name: rcdc-mock-request-service
     protocol: http
-    connect_timeout: 10000
-    write_timeout: 60000   # SOAP calls can take longer than REST
-    read_timeout: 60000    # MDM processing time; application.yml timeout: 30000
+    host: pge-mock-services.default.svc.cluster.local
+    port: 80
+    path: /api/v1/rcdcrequest
     routes:
-      - name: route-outbound-mdm-notification
+      - name: rcdcrequest-route
         paths:
-          - /proxy/ws
+          - /rcdcrequest
         methods:
           - POST
-        strip_path: true          # strips /proxy/ws → forwards /RCDSwitchState
+        strip_path: true
         preserve_host: false
         protocols:
           - http
+          - https
     plugins:
-      # SOAP requires exact Content-Type and empty SOAPAction
       - name: request-transformer
         config:
+          remove:
+            headers:
+              - Authorization
           add:
             headers:
-              - "Content-Type:text/xml; charset=utf-8"
-              - "SOAPAction:\"\""
+              - "Content-Type: application/json"
+              - "Accept: application/json"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # RCDC Response (inbound)  —  client POST /rcdcresponse  →  app /api/v1/rcdc/response
+  # HES → MDM execution-status callback. JSON.
+  # ───────────────────────────────────────────────────────────────────────────
+  - name: rcdc-response-service
+    protocol: http
+    host: pge-camel-eip.default.svc.cluster.local
+    port: 80
+    path: /api/v1/rcdc/response
+    routes:
+      - name: rcdc-response-route
+        paths:
+          - /rcdcresponse
+        methods:
+          - POST
+        strip_path: true
+        preserve_host: false
+        protocols:
+          - http
+          - https
+    plugins:
+      - name: request-transformer
+        config:
+          remove:
+            headers:
+              - Authorization
+          add:
+            headers:
+              - "Content-Type: application/json"
+              - "Accept: application/json"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # RCDC SOAP backend (outbound proxy)  —  client POST|GET /rcdcswitchstatus
+  #                                          →  SOAP 68.233.110.225:8000 /soap/rcdc
+  # The real SOA-RCDC SOAP service, reached over the internet — hence explicit
+  # timeouts and retries for resiliency. strip_path:false keeps /soap/rcdc so
+  # both the SOAP operation and ?wsdl contract retrieval resolve upstream.
+  # ───────────────────────────────────────────────────────────────────────────
+  - name: rcdc-soap-service
+    protocol: http
+    host: 68.233.110.225
+    port: 8000
+    path: /soap/rcdc
+    connect_timeout: 30000        # resiliency for a remote SOAP backend
+    write_timeout: 30000
+    read_timeout: 30000
+    retries: 3
+    routes:
+      - name: rcdc-soap-route
+        paths:
+          - /rcdcswitchstatus
+        methods:
+          - POST                  # SOAP operations
+          - GET                   # ?wsdl contract retrieval
+        strip_path: false         # keep matched path so /soap/rcdc and ?wsdl resolve
+        preserve_host: false
+        protocols:
+          - http
+          - https
+    plugins:
+      # Inject Basic Auth + enforce SOAP/XML content negotiation on the OUTBOUND
+      # call to the SOA-RCDC service.
+      - name: request-transformer
+        config:
           replace:
             headers:
-              - "Content-Type:text/xml; charset=utf-8"
+              # base64("SOAUSER:UserSOA@00") — REGENERATE after rotating creds
+              - "Authorization: Basic U09BVVNFUjpVc2VyU09BQDAw"
+              - "Content-Type: text/xml; charset=utf-8"
+          add:
+            headers:
+              - "Accept: text/xml"
+              # SOAPAction is often required; empty string per the integration doc
+              - "SOAPAction: \"\""
 
-      - name: correlation-id
+  # ───────────────────────────────────────────────────────────────────────────
+  # Alarms (inbound)  —  client POST /alarms  →  app /api/v1/alarms
+  # Alarm events from Kraken CIS. JSON.
+  # ───────────────────────────────────────────────────────────────────────────
+  - name: alarms-service
+    protocol: http
+    host: pge-camel-eip.default.svc.cluster.local
+    port: 80
+    path: /api/v1/alarms
+    routes:
+      - name: alarms-route
+        paths:
+          - /alarms
+        methods:
+          - POST
+        strip_path: true
+        preserve_host: false
+        protocols:
+          - http
+          - https
+    plugins:
+      - name: request-transformer
         config:
-          header_name: X-Correlation-ID
-          generator: uuid
-          echo_downstream: false
+          remove:
+            headers:
+              - Authorization
+          add:
+            headers:
+              - "Content-Type: application/json"
+              - "Accept: application/json"
 
-      - name: rate-limiting
+  # ───────────────────────────────────────────────────────────────────────────
+  # On-Demand Read (inbound)  —  client POST /ondemandread  →  app /api/v1/odr
+  # ODR SOAP request forwarded to the app's ODR endpoint. XML.
+  # NOTE: route renamed `odr-route` — the source used `rcdc-route` which collides
+  # with the RCDC service's route (Kong route names must be globally unique and
+  # `deck sync` / validation would reject the duplicate).
+  # ───────────────────────────────────────────────────────────────────────────
+  - name: ODR-service
+    protocol: http
+    host: pge-camel-eip.default.svc.cluster.local
+    port: 80
+    path: /api/v1/odr
+    routes:
+      - name: odr-route
+        paths:
+          - /ondemandread
+        methods:
+          - POST
+        strip_path: true
+        preserve_host: false
+        protocols:
+          - http
+          - https
+    plugins:
+      - name: request-transformer
         config:
-          minute: 200
-          policy: local
+          remove:
+            headers:
+              - Authorization
+          add:
+            headers:
+              - "Content-Type: application/xml"
+              - "Accept: application/xml"
 
-      # Cap outbound SOAP payload size — MDM SOAP envelopes are small;
-      # large payloads indicate a mapping error before they reach the SOAP service
-      - name: request-size-limiting
-        config:
-          allowed_payload_size: 1   # 1 MB
+# ═════════════════════════════════════════════════════════════════════════════
+# GLOBAL PLUGINS  (apply to every service/route unless overridden locally)
+# ═════════════════════════════════════════════════════════════════════════════
+plugins:
+
+  # Distributed tracing — Kong emits OTLP spans to the cluster OTel Collector so
+  # gateway spans join the app's trace. Endpoint is the in-cluster collector.
+  - name: opentelemetry
+    config:
+      endpoint: http://otel-collector.observability.svc.cluster.local:4318/v1/traces
+      resource_attributes:
+        service.name: kong-gateway
+
+  # Inbound auth — verify HS256 JWT. `iss` claim selects the credential (below);
+  # `exp` is enforced so expired tokens are rejected.
+  - name: jwt
+    config:
+      key_claim_name: iss
+      claims_to_verify:
+        - exp
+
+  # Guarantee an X-Correlation-ID on every request (generate if absent) and echo
+  # it back to the caller — ties Kong, app logs, and traces to one id.
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-ID
+      generator: uuid
+      echo_downstream: true
+
+  # Expose Kong metrics at /metrics for Prometheus scraping.
+  - name: prometheus
+
+  # Coarse global protection — 200 req/min per node (local policy = per-Kong-node,
+  # no shared store). Tighten per-service if a route needs a different limit.
+  - name: rate-limiting
+    config:
+      minute: 200
+      policy: local
+
+  # Access log to disk (demo). In production ship to stdout/HTTP log instead.
+  - name: file-log
+    config:
+      path: /tmp/kong-api.log
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CONSUMERS + JWT CREDENTIALS
+# The single external caller and its HS256 signing secret. The token's `iss`
+# claim must equal `key` (jwt-issuer) for the global jwt plugin to match it.
+# ⚠ Demo secret — externalize via Kong vault / K8s secret and rotate in real envs.
+# ═════════════════════════════════════════════════════════════════════════════
+consumers:
+  - username: external-consumer
+
+jwt_secrets:
+  - consumer: external-consumer
+    key: jwt-issuer
+    secret: Kraken@2026!ExternalConsumer#JWT_Kong$Secure92xLpZ
+    algorithm: HS256

@@ -4,11 +4,8 @@ import com.pge.krakencis.logging.AuditLogger;
 import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.StructuredLogger;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.opentelemetry.api.OpenTelemetry;
-import io.opentelemetry.context.Context;
 import org.apache.camel.Processor;
 import org.apache.camel.component.kafka.KafkaConstants;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 /**
@@ -27,15 +24,10 @@ public class KafkaPublishProcessor {
 
     private final AuditLogger    auditLogger;
     private final MeterRegistry  meterRegistry;
-    private final OpenTelemetry  openTelemetry;
 
-    public KafkaPublishProcessor(AuditLogger auditLogger,
-                                 MeterRegistry meterRegistry,
-                                 ObjectProvider<OpenTelemetry> openTelemetryProvider) {
+    public KafkaPublishProcessor(AuditLogger auditLogger, MeterRegistry meterRegistry) {
         this.auditLogger   = auditLogger;
         this.meterRegistry = meterRegistry;
-        // Use the Spring-managed OpenTelemetry SDK; fall back to no-op if tracing is disabled.
-        this.openTelemetry = openTelemetryProvider.getIfAvailable(OpenTelemetry::noop);
     }
 
     /**
@@ -69,19 +61,6 @@ public class KafkaPublishProcessor {
             if (correlationId != null) {
                 exchange.getIn().setHeader("X-Correlation-ID", correlationId);
             }
-
-            // Inject the W3C trace context (traceparent / tracestate) into the outgoing
-            // Kafka record headers. camel-opentelemetry on the consumer side extracts it
-            // when it starts the consumer span, so the consume span becomes a CHILD of
-            // this producer's span — one trace tree spanning the Kafka boundary.
-            openTelemetry.getPropagators().getTextMapPropagator().inject(
-                Context.current(),
-                exchange.getIn(),
-                (message, headerKey, value) -> {
-                    if (message != null && value != null) {
-                        message.setHeader(headerKey, value);
-                    }
-                });
 
             if (topic != null) {
                 meterRegistry.counter(METRIC_KAFKA_PUBLISH_ATTEMPTED, "topic", topic).increment();

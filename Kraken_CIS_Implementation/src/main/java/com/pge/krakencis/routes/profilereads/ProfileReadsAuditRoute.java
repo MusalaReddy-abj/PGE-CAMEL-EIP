@@ -74,9 +74,12 @@ public class ProfileReadsAuditRoute extends RouteBuilder {
                 "totalRecords", exchange.getProperty(LogConstants.PROP_TOTAL_ROWS)));
     }
 
+    /** S3 consumer header carrying the object key (FTP uses Exchange.FILE_NAME instead). */
+    private static final String HDR_S3_KEY = "CamelAwsS3Key";
+
     private void buildAuditReport(Exchange exchange) {
         String correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
-        String fileName      = exchange.getIn().getHeader(Exchange.FILE_NAME, String.class);
+        String fileName      = resolveFileName(exchange);
         int    totalRows     = exchange.getProperty(LogConstants.PROP_TOTAL_ROWS,   0, Integer.class);
         int    successRows   = exchange.getProperty(LogConstants.PROP_SUCCESS_ROWS, 0, Integer.class);
         String source        = exchange.getProperty("profileReads.source",             "UNKNOWN", String.class);
@@ -109,5 +112,24 @@ public class ProfileReadsAuditRoute extends RouteBuilder {
         exchange.setProperty(LogConstants.KAFKA_KEY, correlationId);
         exchange.getIn().setHeader(KafkaConstants.KEY, correlationId);
         exchange.getIn().setBody(report);
+    }
+
+    /**
+     * Resolves the file name for the audit record across both transports:
+     * FTP sets {@link Exchange#FILE_NAME}; S3 sets {@code CamelAwsS3Key} (the full
+     * object key) — fall back to its last path segment so the audit always carries
+     * the file name regardless of source.
+     */
+    private String resolveFileName(Exchange exchange) {
+        String fileName = exchange.getIn().getHeader(Exchange.FILE_NAME, String.class);
+        if (fileName != null && !fileName.isBlank()) {
+            return fileName;
+        }
+        String s3Key = exchange.getIn().getHeader(HDR_S3_KEY, String.class);
+        if (s3Key != null && !s3Key.isBlank()) {
+            int slash = s3Key.lastIndexOf('/');
+            return slash >= 0 ? s3Key.substring(slash + 1) : s3Key;
+        }
+        return null;
     }
 }
