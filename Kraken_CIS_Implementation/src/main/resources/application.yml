@@ -22,8 +22,9 @@ retry:
 # replays are moved to the *-parking topic for manual review. See DlqReplayRoute.
 dlq:
   replay:
-    enabled: false           # set true to turn on automatic replay
+    enabled: true            # automatic replay ON
     interval-ms: 1800000     # 30 min between replay runs
+    initial-delay-ms: 30000  # first run 30 s after startup (not a full interval later)
     max-messages-per-run: 100
     max-replays: 3           # transient replays before parking
 
