@@ -60,14 +60,34 @@ public class RcdcRequestHttpListner extends BaseRoute {
         processingRoute("direct:process-rcdc", "route-post-rcdc", OPERATION, route ->
             route
                 .process(com.pge.krakencis.logging.SpanEnricher.httpRoute("POST", "/api/v1/rcdc"))
+                // OpenTelemetry Integration — RECEIVED stage span (child of POST /rcdc).
+                // Trace visible in Jaeger. No business logic changes.
+                .process(com.pge.krakencis.observability.TracingHelper.stage(
+                        com.pge.krakencis.observability.TracingConstants.SPAN_RECEIVED))
                 .process(soapEnvelopeExtractorProcessor)  // strip SOAP envelope → plain requestMessage
                 .unmarshal(jaxbFormat)
                 .process(rcdcRequestProcessor)
+                // OpenTelemetry Integration — VALIDATED stage span (validation succeeded above).
+                // No business logic changes.
+                .process(com.pge.krakencis.observability.TracingHelper.stage(
+                        com.pge.krakencis.observability.TracingConstants.SPAN_VALIDATED))
                 .process(rcdcTargetMappingProcessor)
                 .setProperty(LogConstants.KAFKA_TOPIC, constant(rcdcTopic))
+                // OpenTelemetry Integration — KAFKA_PUBLISH_START stage span.
+                // No business logic changes.
+                .process(com.pge.krakencis.observability.TracingHelper.stage(
+                        com.pge.krakencis.observability.TracingConstants.SPAN_KAFKA_PUBLISH_START))
                 .to("direct:publishToKafka")
+                // OpenTelemetry Integration — KAFKA_PUBLISH_SUCCESS stage span.
+                // No business logic changes.
+                .process(com.pge.krakencis.observability.TracingHelper.stage(
+                        com.pge.krakencis.observability.TracingConstants.SPAN_KAFKA_PUBLISH_SUCCESS))
                 .process(rcdcAcknowledgementProcessor)
                 .process(soapEnvelopeWrapperProcessor)    // wrap acknowledgement in SOAP envelope
+                // OpenTelemetry Integration — RESPONSE_SENT stage span (SOAP ack built).
+                // Trace visible in Jaeger. No business logic changes.
+                .process(com.pge.krakencis.observability.TracingHelper.stage(
+                        com.pge.krakencis.observability.TracingConstants.SPAN_RESPONSE_SENT))
         );
     }
 }

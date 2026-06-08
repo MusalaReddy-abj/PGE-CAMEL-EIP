@@ -13,11 +13,11 @@ rest:
 external-services:
   services:
     rcdc:
-      url: http://192.168.4.34:9000/rcdcrequest
+      url: http://192.168.4.34:7080/api/v1/rcdcrequest
       timeout: 30000
       content-type: application/json
     rcdc-mdm-notification:
-      url: http://192.168.4.34:9000/rcdcswitchstatus
+      url: http://192.168.4.34:7080/api/v1/ws/RCDSwitchState
       timeout: 30000
       content-type: "text/xml; charset=utf-8"
 
@@ -38,3 +38,5 @@ http:
       backoff-multiplier: 2.0
       max-delay-ms: 30000
       retryable-status-codes: [429, 500, 502, 503, 504]
+
+ 
