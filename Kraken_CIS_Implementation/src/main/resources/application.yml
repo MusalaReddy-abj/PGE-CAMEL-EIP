@@ -103,8 +103,8 @@ camel:
         sasl-jaas-config: ${kafka.producer.sasl-jaas-config:}
         # saslClientCallbackHandlerClass is not a Camel KafkaConfiguration property —
         # must use additionalProperties with the native Kafka property name.
-        additional-properties:
-          '[sasl.client.callback.handler.class]': ${kafka.producer.sasl-client-callback-handler-class:}
+        # additional-properties:
+        #   '[sasl.client.callback.handler.class]': ${kafka.producer.sasl-client-callback-handler-class:}
 
 management:
   # Distributed tracing (Spring Boot 3.x / Micrometer Tracing with OTel bridge).
@@ -117,15 +117,17 @@ management:
   opentelemetry:
     resource-attributes:
       service.name: kraken-cis
-      service.namespace: pge
-      deployment.environment: ${ENVIRONMENT:dev}
+      service.namespace: 
+      # deployment.environment: ${ENVIRONMENT:dev}
   # OTLP exporter → OTel Collector (HTTP/protobuf receiver on port 4318).
   # Defaults to the in-cluster collector (the same one Kong exports to). Reachable
   # only from inside the cluster; for local dev set OTEL_EXPORTER_OTLP_ENDPOINT
   # to your local collector, e.g. http://localhost:4318.
   otlp:
     tracing:
-      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://otel-collector.observability.svc.cluster.local:4318}/v1/traces
+      endpoint: http://otel-collector.observability.svc.cluster.local:4318/v1/traces
+      # endpoint: http://localhost:4318/v1/traces
+      # endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://otel-collector.observability.svc.cluster.local:4318}/v1/traces
 
   endpoints:
     web:
@@ -142,6 +144,26 @@ management:
         enabled: true
         descriptions: true
         step: 60s
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OpenTelemetry Integration — Native OpenTelemetry SDK tracing.
+# ADDITIVE: coexists with the Micrometer-bridge auto-instrumentation configured
+# under management.tracing / management.otlp above. This block configures ONLY the
+# custom stage spans (RECEIVED / VALIDATED / KAFKA_PUBLISH_* / EXTERNAL_SERVICE_CALL
+# / RESPONSE_SENT) emitted by com.pge.krakencis.observability.
+# Disable entirely with otel.tracing.enabled=false (existing tracing is unaffected).
+# ─────────────────────────────────────────────────────────────────────────────
+otel:
+  tracing:
+    enabled: ${OTEL_TRACING_ENABLED:true}
+    service-name: ${OTEL_SERVICE_NAME:camel-rcd-service-dev-main}
+    service-namespace: ${OTEL_SERVICE_NAMESPACE:pge}
+    environment: ${ENVIRONMENT:dev}
+    # Collector base endpoint ("/v1/traces" is appended automatically). Shares the
+    # same env var as the Micrometer bridge so both export to the same collector.
+    # endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}
+    # endpoint: http://localhost:4318
+    endpoint: http://otel-collector.observability.svc.cluster.local:4318
 
 logging:
   level:

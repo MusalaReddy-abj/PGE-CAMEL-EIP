@@ -179,10 +179,39 @@
         </dependency>
 
         <!-- OTLP exporter — ships spans to the OTel Collector (then Tempo/Jaeger).
-             Endpoint set via management.otlp.tracing.endpoint in application.yml. -->
+             Endpoint set via management.otlp.tracing.endpoint in application.yml.
+             Also used by the Native OpenTelemetry SDK (com.pge.krakencis.observability). -->
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+
+        <!-- ─────────────────────────────────────────────────────────────────────
+             Native OpenTelemetry SDK (com.pge.krakencis.observability)
+             ADDITIVE: builds an independent SdkTracerProvider that emits custom
+             stage spans (RECEIVED / VALIDATED / KAFKA_PUBLISH_* / EXTERNAL_SERVICE_CALL
+             / RESPONSE_SENT). Coexists with the Micrometer-bridge auto-instrumentation
+             above; both share the OpenTelemetry Context so spans nest into one trace.
+             api/sdk/context versions are managed by the Spring Boot BOM (version-less)
+             so they align with the OTel version the Micrometer bridge already pulls.
+             ───────────────────────────────────────────────────────────────────── -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-context</artifactId>
+        </dependency>
+        <!-- Semantic-convention attribute keys (not managed by the Spring Boot BOM → explicit version). -->
+        <dependency>
+            <groupId>io.opentelemetry.semconv</groupId>
+            <artifactId>opentelemetry-semconv</artifactId>
+            <version>1.25.0-alpha</version>
         </dependency>
 
         <!-- Logstash JSON encoder -->
