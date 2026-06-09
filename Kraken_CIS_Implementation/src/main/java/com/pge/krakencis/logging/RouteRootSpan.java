@@ -42,6 +42,11 @@ public final class RouteRootSpan {
         try {
             Span span = GlobalOpenTelemetry.getTracer(INSTRUMENTATION_SCOPE)
                     .spanBuilder(spanName)
+                    // Force a brand-new trace. Poll consumers run on long-lived, reused threads
+                    // (S3/FTP poll, timer) where the Agent may leave stale context; without
+                    // setNoParent() this span would attach to that older trace ("appended to
+                    // older traces") instead of starting its own.
+                    .setNoParent()
                     .setSpanKind(SpanKind.CONSUMER)
                     .startSpan();
             Scope scope = span.makeCurrent();

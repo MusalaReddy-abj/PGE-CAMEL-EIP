@@ -2,7 +2,7 @@ package com.pge.krakencis.logging;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.SpanBuilder;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
@@ -80,14 +80,6 @@ public final class KafkaTraceContext {
             return;
         }
         try {
-            Context remote = GlobalOpenTelemetry.getPropagators().getTextMapPropagator()
-                    .extract(Context.root(), exchange.getIn(), GETTER);
-            SpanContext sc = Span.fromContext(remote).getSpanContext();
-            if (!sc.isValid()) {
-                // Record carried no (valid) trace context — leave the Agent's span as-is.
-                return;
-            }
-
             // Scope cleanup must run on this same consumer thread; without a unit of
             // work we cannot guarantee that, so skip rather than leak an open scope.
             if (exchange.getUnitOfWork() == null) {
@@ -95,12 +87,24 @@ public final class KafkaTraceContext {
                 return;
             }
 
+            Context remote = GlobalOpenTelemetry.getPropagators().getTextMapPropagator()
+                    .extract(Context.root(), exchange.getIn(), GETTER);
+            boolean hasRemote = Span.fromContext(remote).getSpanContext().isValid();
+
             String topic = exchange.getIn().getHeader(KafkaConstants.TOPIC, String.class);
-            Span span = GlobalOpenTelemetry.getTracer(INSTRUMENTATION_SCOPE)
+            SpanBuilder builder = GlobalOpenTelemetry.getTracer(INSTRUMENTATION_SCOPE)
                     .spanBuilder("process " + (topic != null ? topic : "kafka"))
-                    .setSpanKind(SpanKind.CONSUMER)
-                    .setParent(remote)
-                    .startSpan();
+                    .setSpanKind(SpanKind.CONSUMER);
+            if (hasRemote) {
+                // Join the producer's distributed trace.
+                builder.setParent(remote);
+            } else {
+                // No upstream trace context on the record → start a fresh root. Crucially do
+                // NOT fall through to the ambient Context.current(): consumer threads are
+                // reused, so a leaked span would make this consume append to an older trace.
+                builder.setNoParent();
+            }
+            Span span = builder.startSpan();
             if (topic != null) {
                 span.setAttribute("messaging.system", "kafka");
                 span.setAttribute("messaging.operation", "process");
