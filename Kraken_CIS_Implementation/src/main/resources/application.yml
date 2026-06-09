@@ -10,24 +10,6 @@ spring:
 server:
   port: 8121
 
-# Retry-queue consumer — delay between retry-queue attempts (back-off)
-retry:
-  queue:
-    max-attempts: 3          # re-entries into retry queue before final DLQ
-    poll-delay-ms: 300000    # 5 min — slow poll IS the back-off delay
-
-# Automatic DLQ replay (DlqReplayRoute) — OPT-IN, disabled by default.
-# When enabled, transient-failure DLQ messages are periodically replayed back to
-# their source topic (capped by max-replays); permanent errors and exhausted
-# replays are moved to the *-parking topic for manual review. See DlqReplayRoute.
-dlq:
-  replay:
-    enabled: true            # automatic replay ON
-    interval-ms: 1800000     # 30 min between replay runs
-    initial-delay-ms: 30000  # first run 30 s after startup (not a full interval later)
-    max-messages-per-run: 100
-    max-replays: 3           # transient replays before parking
-
 # Kong JWT — Bearer token added to all outbound HTTP calls routed through Kong.
 # Override kong.jwt.secret via environment variable KONG_JWT_SECRET in production.
 kong:
