@@ -47,7 +47,7 @@ public class AlarmHttpListner extends BaseRoute {
     @Override
     public void configure() {
         rest()
-            .post("/alarms")
+            .post("/v1/alarms")
                 .description("Receive alarm events from Kraken CIS and publish to Kafka")
                 .consumes("application/json")
                 .produces("application/json")

@@ -54,6 +54,12 @@ http:
       max-delay-ms: 30000
       retryable-status-codes: [404, 408, 429, 500, 502, 503, 504]
 
+# ODR API versioning — v2 (/api/v2/odr, JSON response) coexists with v1 (/api/v1/odr, SOAP/XML).
+# Rollback to v1-only: set odr.v2.enabled=false and restart. v1 is unaffected either way.
+odr:
+  v2:
+    enabled: true
+
 ftp:
   listener:
     enabled: false   # set true to re-enable the Profile Reads FTP poller
