@@ -116,7 +116,9 @@ public class RcdcHesRetryKafkaRoute extends BaseKafkaConsumerRoute {
     }
 
     private int parseAttempt(Exchange exchange) {
-        String raw = exchange.getIn().getHeader("X-Error-Attempt", "0", String.class);
-        try { return Integer.parseInt(raw); } catch (NumberFormatException e) { return 0; }
+        // Must use the byte[]-aware reader: Kafka delivers X-Error-Attempt as a byte[],
+        // and a plain String read falls back to 0 — which makes the exhaustion guard never
+        // trip and the message retry forever. See BaseKafkaConsumerRoute#parseKafkaHeaderAsInt.
+        return parseKafkaHeaderAsInt(exchange, "X-Error-Attempt", 0);
     }
 }

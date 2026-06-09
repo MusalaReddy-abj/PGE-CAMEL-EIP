@@ -193,8 +193,16 @@ public class DlqReplayRoute extends RouteBuilder {
         ProducerRecord<String, String> out = new ProducerRecord<>(topic, src.key(), src.value());
         for (Header h : src.headers()) {
             String k = h.key();
-            if (replay && (k.startsWith("X-Error-") || k.equals("X-Destination-Type") || k.equals(HDR_REPLAY))) {
-                continue;   // drop error context on replay
+            if (replay && (k.startsWith("X-Error-")
+                    || k.equals("X-Destination-Type")
+                    || k.equals(HDR_REPLAY)
+                    // Drop the stale W3C trace context from the original failure. The Agent
+                    // re-injects the current (replay-run) traceparent on send(), so the
+                    // reprocessed message links to this replay — not an ancient trace.
+                    || k.equalsIgnoreCase("traceparent")
+                    || k.equalsIgnoreCase("tracestate")
+                    || k.equalsIgnoreCase("baggage"))) {
+                continue;   // drop error + stale trace context on replay
             }
             out.headers().add(h);
         }
