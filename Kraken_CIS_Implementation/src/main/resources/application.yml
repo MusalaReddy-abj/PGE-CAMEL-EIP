@@ -48,7 +48,7 @@ external-services:
 http:
   client:
     retry:
-      max-attempts: 3
+      max-attempts: 1          # DEMO — REVERT to 3 before prod (1 = no HTTP-level retries)
       initial-delay-ms: 1000
       backoff-multiplier: 2.0
       max-delay-ms: 30000

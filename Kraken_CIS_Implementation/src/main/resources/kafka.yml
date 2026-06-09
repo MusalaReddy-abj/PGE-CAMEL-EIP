@@ -53,7 +53,7 @@ kafka:
 retry:
   queue:
     max-attempts: 3          # re-entries into retry queue before final DLQ
-    poll-delay-ms: 60000    # 5 min — slow poll IS the back-off delay
+    poll-delay-ms: 15000    # DEMO 15s — REVERT to 300000 (5 min) before prod
 
 # Automatic DLQ replay (DlqReplayRoute) — OPT-IN, disabled by default.
 # When enabled, transient-failure DLQ messages are periodically replayed back to
@@ -62,7 +62,7 @@ retry:
 dlq:
   replay:
     enabled: true            # automatic replay ON
-    interval-ms: 60000     # 30 min between replay runs
-    initial-delay-ms: 30000  # first run 30 s after startup (not a full interval later)
+    interval-ms: 15000     # DEMO 15s — REVERT to 1800000 (30 min) before prod
+    initial-delay-ms: 15000  # DEMO 15s first run — REVERT to 30000 before prod
     max-messages-per-run: 100
     max-replays: 3           # transient replays before parking

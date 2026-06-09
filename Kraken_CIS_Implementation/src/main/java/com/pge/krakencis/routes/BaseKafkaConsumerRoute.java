@@ -48,7 +48,7 @@ import java.util.UUID;
 public abstract class BaseKafkaConsumerRoute extends BaseRoute {
 
     private static final StructuredLogger log         = StructuredLogger.of(BaseKafkaConsumerRoute.class);
-    protected static final int            MAX_RETRIES = 3;
+    protected static final int            MAX_RETRIES = 1;   // DEMO — REVERT to 3 before prod
 
     // ── Metric names ─────────────────────────────────────────────────────────
     static final String METRIC_KAFKA_CONSUMED = "kafka.consumed";
