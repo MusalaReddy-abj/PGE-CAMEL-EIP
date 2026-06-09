@@ -102,6 +102,10 @@ public class ProfileReadsS3Listner extends BaseRoute {
             // thread. This prevents a later poll cycle from picking up the same object
             // while a large file is still being processed (which caused the same file to
             // be published to Kafka twice and a NoSuchKey 404 when both tried to archive).
+            // Start a root span for this poll — the Agent gives no entry span to S3/FTP/timer
+            // consumers, so without this the S3-SDK and Kafka-publish spans are disconnected
+            // orphans. All downstream spans nest under this one into a single trace.
+            .process(ex -> com.pge.krakencis.logging.RouteRootSpan.start(ex, "process profile-reads-s3"))
             .process(correlationIdProcessor)
             .choice()
                 // Only .csv files (case-insensitive) are processed.

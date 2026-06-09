@@ -93,6 +93,9 @@ public class DlqReplayRoute extends RouteBuilder {
             "initialDelayMs", initialDelayMs, "intervalMs", intervalMs, "maxPerRun", maxPerRun);
         from("timer:dlq-replay?period=" + intervalMs + "&delay=" + initialDelayMs)
             .routeId("route-dlq-replay")
+            // Start a root span for the replay run — the Agent gives no entry span to timer
+            // consumers, so without this the raw-Kafka consumer/producer spans are orphans.
+            .process(ex -> com.pge.krakencis.logging.RouteRootSpan.start(ex, "dlq-replay-run"))
             .process(this::replayAllDlqs);
     }
 
