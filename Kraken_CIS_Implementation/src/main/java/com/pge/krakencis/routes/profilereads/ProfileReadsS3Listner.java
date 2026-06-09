@@ -110,7 +110,14 @@ public class ProfileReadsS3Listner extends BaseRoute {
                     // placeholder objects that are re-polled every cycle (those would otherwise
                     // emit a noise span on every poll). The Agent gives no entry span to S3
                     // consumers, so this roots the S3-SDK + Kafka-publish spans into one trace.
-                    .process(ex -> com.pge.krakencis.logging.RouteRootSpan.start(ex, "process profile-reads-s3"))
+                    .process(ex -> {
+                        com.pge.krakencis.logging.RouteRootSpan.start(ex, "process profile-reads-s3");
+                        // Stamp the file name (and full S3 key) so the trace is searchable by file.
+                        com.pge.krakencis.logging.RouteRootSpan.attr(ex, "file.name",
+                            fileNameFrom(ex.getIn().getHeader(HDR_KEY, String.class)));
+                        com.pge.krakencis.logging.RouteRootSpan.attr(ex, "aws.s3.key",
+                            ex.getIn().getHeader(HDR_KEY, String.class));
+                    })
                     .process(routeLoggingProcessor.entry(OPERATION))
                     .process(profileReadsCsvProcessor)
                     .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsTopic))
@@ -134,7 +141,17 @@ public class ProfileReadsS3Listner extends BaseRoute {
                 .otherwise()
                     // A real (but unsupported) file IS available here — trace its rejection/move
                     // to the error prefix. Distinct span name so error files are easy to find.
-                    .process(ex -> com.pge.krakencis.logging.RouteRootSpan.start(ex, "reject profile-reads-s3-file"))
+                    .process(ex -> {
+                        com.pge.krakencis.logging.RouteRootSpan.start(ex, "reject profile-reads-s3-file");
+                        com.pge.krakencis.logging.RouteRootSpan.attr(ex, "file.name",
+                            fileNameFrom(ex.getIn().getHeader(HDR_KEY, String.class)));
+                        com.pge.krakencis.logging.RouteRootSpan.attr(ex, "aws.s3.key",
+                            ex.getIn().getHeader(HDR_KEY, String.class));
+                        // This branch does not call routeLoggingProcessor.entry(), so stamp the
+                        // correlation_id here too (set by correlationIdProcessor before the choice).
+                        com.pge.krakencis.logging.RouteRootSpan.attr(ex, "correlation_id",
+                            ex.getProperty(LogConstants.PROP_CORRELATION_ID, String.class));
+                    })
                     .process(exchange -> {
                         String key = exchange.getIn().getHeader(HDR_KEY, String.class);
                         String cid = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);

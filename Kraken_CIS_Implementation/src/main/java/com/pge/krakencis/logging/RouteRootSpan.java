@@ -67,6 +67,26 @@ public final class RouteRootSpan {
         }
     }
 
+    /**
+     * Adds a string attribute to the currently-active span (no-op if the value is null or no
+     * valid span is current). Use right after {@link #start} to make a route searchable by a
+     * business key — e.g. {@code attr(exchange, "file.name", key)} so traces can be found by
+     * file name in the backend (Jaeger tag {@code file.name}, Tempo {@code { .file.name = ... }}).
+     */
+    public static void attr(Exchange exchange, String key, String value) {
+        if (exchange == null || value == null) {
+            return;
+        }
+        try {
+            Span span = Span.current();
+            if (span.getSpanContext().isValid()) {
+                span.setAttribute(key, value);
+            }
+        } catch (Exception e) {
+            log.debug("routeRootSpanAttrFailed", null, "key", key, "error", e.getMessage());
+        }
+    }
+
     private static void end(Span span, Scope scope, Throwable error) {
         try {
             if (error != null) {
