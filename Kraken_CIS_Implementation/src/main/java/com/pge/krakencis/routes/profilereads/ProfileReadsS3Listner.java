@@ -50,7 +50,7 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
  * <h3>Route ID</h3>
  * {@code route-profile-reads-s3}
  */
-// @Component
+ @Component
 @ConditionalOnProperty(prefix = "aws.s3.profile-reads", name = "bucket-name")
 public class ProfileReadsS3Listner extends BaseRoute {
 
