@@ -73,14 +73,18 @@ public class RcdcRequestKafkaListner extends BaseKafkaConsumerRoute {
         configureKafkaErrorHandlers(route, rcdcRetryTopic, rcdcDlqTopic, SERVICE_NAME);
 
         route
-            .process(com.pge.krakencis.logging.SpanEnricher.kafkaConsume())
+            // Re-join the producer's distributed trace. The Java Agent injects the W3C
+            // traceparent into the Kafka record on publish but does NOT extract it for
+            // Camel consumer routes (Camel iterates records via a path the Agent's
+            // kafka-clients instrumentation does not wrap), so without this the consume
+            // side starts a disconnected root trace. KafkaTraceContext reads the context
+            // off the record headers and starts a CONSUMER span under it, made current for
+            // the rest of the route — also names/attributes the span (supersedes the former
+            // SpanEnricher.kafkaConsume() call).
+            .process(com.pge.krakencis.logging.KafkaTraceContext::adopt)
             .process(exchange -> exchange.setProperty(
                 LogConstants.PROP_ORIGINAL_BODY, exchange.getIn().getBody(String.class)))
             .process(exchange -> extractCorrelationId(exchange, "rcdcMessageConsumed"))
-            // OpenTelemetry Java Agent Migration — Native SDK removed.
-            // The custom KAFKA_CONSUME stage span (formerly via TracingHelper) is removed;
-            // the Java Agent's Kafka-consumer instrumentation creates the consume span and
-            // links it to the producer trace automatically. No business logic changes.
             .process(routeLoggingProcessor.entry(OPERATION))
             .process(rcdcTargetCallProcessor)
             .process(rcdcTargetResponseProcessor)

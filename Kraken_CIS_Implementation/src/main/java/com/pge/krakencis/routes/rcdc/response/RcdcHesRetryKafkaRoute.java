@@ -75,7 +75,9 @@ public class RcdcHesRetryKafkaRoute extends BaseKafkaConsumerRoute {
         configureRetryQueueErrorHandlers(route, hesRetryTopic, hesDlqTopic, SERVICE_NAME);
 
         route
-            .process(com.pge.krakencis.logging.SpanEnricher.kafkaConsume())
+            // Re-join the producer's trace (the Agent injects traceparent on publish but
+            // does not extract it for Camel consumers). Supersedes SpanEnricher.kafkaConsume().
+            .process(com.pge.krakencis.logging.KafkaTraceContext::adopt)
             .process(exchange -> exchange.setProperty(
                 LogConstants.PROP_ORIGINAL_BODY, exchange.getIn().getBody(String.class)))
             .process(this::extractCorrelationIdFromRetry)
