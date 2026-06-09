@@ -11,8 +11,8 @@ EXPOSE 8080
 ENTRYPOINT ["java", \
   "-javaagent:/app/opentelemetry-javaagent.jar", \
   "-Dotel.service.name=pge-camel-eip", \
-  "-Dotel.exporter.otlp.endpoint=http://otel-collector.observability.svc.cluster.local:4317", \
-  "-Dotel.exporter.otlp.protocol=grpc", \
+  "-Dotel.exporter.otlp.endpoint=http://otel-collector.observability.svc.cluster.local:4318", \
+  "-Dotel.exporter.otlp.protocol=http/protobuf", \
   "-Dotel.traces.exporter=otlp", \
   "-Dotel.metrics.exporter=none", \
   "-Dotel.logs.exporter=none", \

@@ -20,6 +20,13 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
+//OpenTelemetry 
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
+
+
 /**
  * Common HTTP sender for all outbound calls (REST JSON and SOAP XML).
  *
@@ -49,6 +56,8 @@ import java.util.concurrent.TimeUnit;
  */
 @Service
 public class HttpClientService {
+
+    private static final Tracer tracer = GlobalOpenTelemetry.getTracer("kraken-http-client");
 
     private static final StructuredLogger log = StructuredLogger.of(HttpClientService.class);
 
@@ -158,9 +167,20 @@ public class HttpClientService {
 
     // ── private ───────────────────────────────────────────────────────────────
 
+    
     private HttpOutboundResponse doSend(HttpOutboundRequest request, String correlationId,
                                          int attempt, int maxAttempts) {
         long startTime = System.currentTimeMillis();
+        Span span = tracer.spanBuilder(request.getServiceName())
+                  .startSpan();
+
+        log.info("OTEL_SPAN_CREATED",
+    correlationId,
+    "service", request.getServiceName());
+    
+        span.setAttribute("outbound.service", request.getServiceName());
+        span.setAttribute("http.url", request.getUrl());
+        span.setAttribute("http.method", request.getMethod());
 
         log.debug("httpOutboundAttempt", correlationId,
             "service",     request.getServiceName(),
@@ -170,7 +190,7 @@ public class HttpClientService {
             "attempt",     attempt,
             "maxAttempts", maxAttempts);
 
-        try {
+        try (Scope scope = span.makeCurrent()){
             String url         = Objects.requireNonNull(request.getUrl(),         "url");
             String method      = Objects.requireNonNull(request.getMethod(),      "method");
             String contentType = Objects.requireNonNull(request.getContentType(), "contentType");
@@ -264,8 +284,12 @@ public class HttpClientService {
                 "error",      e.getMessage());
             throw ExternalServiceException.unavailable(request.getUrl(), correlationId, e);
         }
+        finally {
+            span.end();
+        }
     }
-
+    
+    
     private int resolveMaxAttempts(HttpOutboundRequest request) {
         Integer override = request.getMaxRetryAttempts();
         return override != null ? override : httpClientProperties.getRetry().getMaxAttempts();
