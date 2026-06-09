@@ -35,6 +35,22 @@ public class KafkaProducerConfig {
         "org.apache.kafka.common.serialization.StringSerializer";
     private String valueSerializer =
         "org.apache.kafka.common.serialization.StringSerializer";
+    /**
+     * Max in-flight requests per connection. Must be ≤ 5 when {@code acks=all}
+     * and {@code retries > 0} to guarantee ordering and prevent duplicates under
+     * high-throughput retry scenarios.
+     */
+    private int    maxInFlightRequest = 5;
+
+    // ── Security (optional — only appended when securityProtocol is not PLAINTEXT) ──
+    /** e.g. {@code SASL_SSL} for MSK IAM/SCRAM, {@code PLAINTEXT} for local dev. */
+    private String securityProtocol              = "PLAINTEXT";
+    /** e.g. {@code AWS_MSK_IAM} or {@code SCRAM-SHA-512}. */
+    private String saslMechanism                 = "";
+    /** Full JAAS config line, e.g. {@code software.amazon.msk.auth.iam.IAMLoginModule required;}. */
+    private String saslJaasConfig                = "";
+    /** Callback handler class, e.g. {@code software.amazon.msk.auth.iam.IAMClientCallbackHandler}. */
+    private String saslClientCallbackHandlerClass = "";
 
     /**
      * Query-string-only parameters (no topic prefix).
@@ -42,14 +58,53 @@ public class KafkaProducerConfig {
      *   .toD("kafka:${exchangeProperty.kafkaTopic}?" + buildQueryString())
      */
     public String buildQueryString() {
-        return "brokers="          + brokers
-            + "&acks="             + acks
-            + "&retries="          + retries
-            + "&requestTimeoutMs=" + requestTimeoutMs
-            + "&lingerMs="         + lingerMs
-            + "&compressionCodec=" + compressionType
-            + "&keySerializer="    + keySerializer
-            + "&valueSerializer="  + valueSerializer;
+        StringBuilder q = new StringBuilder()
+            .append("brokers=")                        .append(brokers)
+            .append("&additionalProperties[acks]=")    .append(acks)
+            .append("&retries=")                       .append(retries)
+            .append("&requestTimeoutMs=")              .append(requestTimeoutMs)
+            .append("&lingerMs=")                      .append(lingerMs)
+            .append("&compressionCodec=")              .append(compressionType)
+            .append("&keySerializer=")                 .append(keySerializer)
+            .append("&valueSerializer=")               .append(valueSerializer)
+            .append("&maxInFlightRequest=")            .append(maxInFlightRequest);
+
+        if (!"PLAINTEXT".equalsIgnoreCase(securityProtocol)) {
+            q.append("&securityProtocol=")                   .append(securityProtocol);
+            if (!saslMechanism.isBlank()) {
+                q.append("&saslMechanism=")                  .append(saslMechanism);
+            }
+            if (!saslJaasConfig.isBlank()) {
+                q.append("&saslJaasConfig=")                 .append(saslJaasConfig);
+            }
+            if (!saslClientCallbackHandlerClass.isBlank()) {
+                // saslClientCallbackHandlerClass is not a valid Camel Kafka URI param —
+                // must be passed via additionalProperties using the native Kafka property name.
+                q.append("&additionalProperties[sasl.client.callback.handler.class]=")
+                 .append(saslClientCallbackHandlerClass);
+            }
+        }
+        return q.toString();
+    }
+
+    /**
+     * Security-only query string fragment — appended to Kafka consumer URIs that
+     * are built inline in each route and cannot go through {@link #buildQueryString()}.
+     * Returns an empty string when {@code securityProtocol} is PLAINTEXT so local
+     * dev routes are unaffected.
+     */
+    public String buildSecurityQueryString() {
+        if ("PLAINTEXT".equalsIgnoreCase(securityProtocol)) return "";
+        StringBuilder q = new StringBuilder();
+        q.append("&securityProtocol=").append(securityProtocol);
+        if (!saslMechanism.isBlank())
+            q.append("&saslMechanism=").append(saslMechanism);
+        if (!saslJaasConfig.isBlank())
+            q.append("&saslJaasConfig=").append(saslJaasConfig);
+        if (!saslClientCallbackHandlerClass.isBlank())
+            q.append("&additionalProperties[sasl.client.callback.handler.class]=")
+             .append(saslClientCallbackHandlerClass);
+        return q.toString();
     }
 
     /**

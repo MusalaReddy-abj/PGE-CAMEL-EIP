@@ -4,45 +4,119 @@ spring:
   profiles:
     active: dev
   config:
-    import: optional:classpath:kafka.yml,optional:classpath:ftp.yml
+    import: optional:classpath:kafka.yml,optional:classpath:ftp.yml,optional:classpath:s3.yml
 
 # Spring Boot embedded server (Actuator management endpoints only)
 server:
-  port: 9081
+  port: 8121
+
+# Kong JWT — Bearer token added to all outbound HTTP calls routed through Kong.
+# Override kong.jwt.secret via environment variable KONG_JWT_SECRET in production.
+kong:
+  jwt:
+    secret: Kraken@2026!ExternalConsumer#JWT_Kong$Secure92xLpZ
+    issuer: jwt-issuer
+    expiry: 2910000000
 
 # Camel Undertow REST API (main application port)
 rest:
   host: 0.0.0.0
-  port: 9080
+  port: 8122
 
 # External service endpoints — all outbound target URLs configured here.
 # Override per environment in config/{env}/application-{env}.yml
 external-services:
   services:
     rcdc:
-      url: http://localhost:8082/api/rcdc/command
+      url: http://k8s-kong-kongprox-9acef1f816-46ee569626f12d48.elb.ap-south-2.amazonaws.com/rcdcrequest
       timeout: 30000
       content-type: application/json
     rcdc-mdm-notification:
-      url: http://localhost:8083/ws/RCDSwitchState
+      url: http://k8s-kong-kongprox-9acef1f816-46ee569626f12d48.elb.ap-south-2.amazonaws.com/rcdcswitchstatus
       timeout: 30000
       content-type: "text/xml; charset=utf-8"
+    odr-mock:
+      url: http://k8s-kong-kongprox-9acef1f816-46ee569626f12d48.elb.ap-south-2.amazonaws.com/mockondemandread
+      timeout: 30000
+      content-type: "text/xml; charset=utf-8"
+
+# HTTP outbound client — in-process retry behaviour.
+# Each Kafka consumer route defines its own retry/DLQ topic via @Value injection
+# (e.g. kafka.topic.rcdc-retry → kraken-rcdc-retry-events).
+# SOAP Server faults (detected in body on HTTP 200) are mapped to status 500
+# before this list is evaluated, so they are automatically retried.
+http:
+  client:
+    retry:
+      max-attempts: 3
+      initial-delay-ms: 1000
+      backoff-multiplier: 2.0
+      max-delay-ms: 30000
+      retryable-status-codes: [404, 408, 429, 500, 502, 503, 504]
+
+ftp:
+  listener:
+    enabled: false   # set true to re-enable the Profile Reads FTP poller
 
 camel:
   springboot:
     name: KrakenCISContext
     stream-caching-enabled: true
+    # Spool exchange bodies > 100 MB to disk instead of keeping them in heap.
+    # Prevents OOM when large CSV files are buffered between Camel processors.
+    stream-caching-spool-enabled: true
+    stream-caching-spool-directory: ${java.io.tmpdir}/camel-spool
+    stream-caching-spool-threshold: 104857600   # 100 MB
   main:
     auto-startup: true
+  # OpenTelemetry Java Agent Migration — Native SDK removed / Instrumentation provided
+  # by Java Agent. Camel routes/processors are now auto-instrumented by the OpenTelemetry
+  # Java Agent (camel-observation-starter removed), so all spans nest into one connected trace.
+  # Global Kafka security defaults — applied to ALL Camel Kafka endpoints
+  # (both producer toD() and every consumer route URI).
+  # Must be under camel.component.kafka.configuration.* — not directly under
+  # camel.component.kafka.* — so Camel propagates them to every endpoint's
+  # KafkaConfiguration, including all consumer clients.
+  component:
+    kafka:
+      configuration:
+        security-protocol: ${kafka.producer.security-protocol:PLAINTEXT}
+        sasl-mechanism: ${kafka.producer.sasl-mechanism:}
+        sasl-jaas-config: ${kafka.producer.sasl-jaas-config:}
+        # saslClientCallbackHandlerClass is not a Camel KafkaConfiguration property —
+        # must use additionalProperties with the native Kafka property name.
+        # additional-properties:
+        #   '[sasl.client.callback.handler.class]': ${kafka.producer.sasl-client-callback-handler-class:}
 
+# OpenTelemetry Java Agent Migration
+# Native SDK removed / Instrumentation provided by Java Agent.
+# All distributed tracing — span creation, sampling, service.name, and OTLP export —
+# is now configured on the OpenTelemetry Java Agent via -Dotel.* flags in the
+# Dockerfile (service name PGE_IMP_DEV_MAIN, OTLP/gRPC → :4317). The former
+# management.tracing / management.otlp / management.opentelemetry blocks (Micrometer
+# Tracing bridge) and the otel.tracing.* block (Native SDK) have been removed.
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,camelroutes,camelstats
+        include: health,info,camelroutes,camelstats,prometheus,metrics
   endpoint:
     health:
       show-details: always
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+        descriptions: true
+        step: 60s
+
+# OpenTelemetry Java Agent Migration
+# Native SDK removed / Instrumentation provided by Java Agent.
+# The former otel.tracing.* block (Native OpenTelemetry SDK stage spans) has been
+# removed. Service name, endpoint, protocol and sampling are now set on the Java
+# Agent via -Dotel.* flags in the Dockerfile.
 
 logging:
   level:

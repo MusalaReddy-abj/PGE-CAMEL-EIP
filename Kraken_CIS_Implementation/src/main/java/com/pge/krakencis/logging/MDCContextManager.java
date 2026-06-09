@@ -7,19 +7,19 @@ import org.springframework.stereotype.Component;
 import java.util.UUID;
 
 /**
- * Manages the SLF4J MDC (Mapped Diagnostic Context) lifecycle for every Camel exchange.
+ * Manages the SLF4J MDC (Mapped Diagnostic Context) for every Camel exchange.
  *
- * <p>Call {@link #populateMDC(Exchange)} at route entry to stamp all subsequent log
- * lines with the correlation ID, exchange ID, and route ID. Call {@link #clearMDC()}
- * at route exit (or in a {@code doFinally} block) to prevent MDC leakage across
- * thread re-use in a thread-pooled environment.
+ * <p>Call {@link #populateMDC(Exchange)} at route entry to stamp log lines with
+ * correlationId, routeId and exchangeId. Call {@link #clearMDC()} at route exit
+ * to clear all MDC keys (prevents leakage when the thread is reused from a pool).
  *
- * <h3>Sanitisation</h3>
- * <p>Inbound correlation IDs (read from HTTP headers) are sanitised before being
- * stored: ASCII control characters — including newlines and carriage returns — are
- * replaced with {@code _}, and the value is capped at
- * {@value #CORRELATION_ID_MAX_LEN} characters. This prevents log-injection attacks
- * where a crafted {@code X-Correlation-ID} header could forge log entries.
+ * <h3>OpenTelemetry Java Agent Migration</h3>
+ * <p>Native SDK removed / Instrumentation provided by Java Agent. Span creation is
+ * no longer managed here — the OpenTelemetry Java Agent creates the entry span (and
+ * for Camel routes/Undertow REST) automatically and injects {@code trace_id} /
+ * {@code span_id} into MDC via its logback-mdc instrumentation. The former
+ * Micrometer-Tracing {@code Tracer}-based span lifecycle has been removed;
+ * {@link #endTrace(Exchange)} is retained as a safe no-op for callers.
  */
 @Component
 public class MDCContextManager {
@@ -64,6 +64,17 @@ public class MDCContextManager {
         }
     }
 
+    /**
+     * OpenTelemetry Java Agent Migration — Native SDK removed / Instrumentation
+     * provided by Java Agent. The Agent owns the span lifecycle, so there is no
+     * application-managed span to close here. Retained as a safe no-op so existing
+     * callers ({@link RouteLoggingProcessor#cleanup(Exchange)} and onException
+     * handlers) need no changes.
+     */
+    public void endTrace(Exchange exchange) {
+        // No-op: span lifecycle is handled by the OpenTelemetry Java Agent.
+    }
+
     public void clearMDC() {
         MDC.remove(LogConstants.MDC_CORRELATION_ID);
         MDC.remove(LogConstants.MDC_EXCHANGE_ID);
@@ -71,6 +82,10 @@ public class MDCContextManager {
         MDC.remove(LogConstants.MDC_MESSAGE_TYPE);
         MDC.remove(LogConstants.MDC_SOURCE_SYSTEM);
         MDC.remove(LogConstants.MDC_TARGET_SYSTEM);
+        // Safety fallback: remove trace keys in case endTrace() was not called
+        // (e.g. on error paths that bypass routeLoggingProcessor.exit)
+        MDC.remove(LogConstants.MDC_TRACE_ID);
+        MDC.remove(LogConstants.MDC_SPAN_ID);
     }
 
     public void set(String key, String value) {

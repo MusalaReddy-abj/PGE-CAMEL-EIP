@@ -3,7 +3,10 @@ package com.pge.krakencis.services;
 import com.pge.krakencis.configs.HttpClientProperties;
 import com.pge.krakencis.exceptions.ErrorCode;
 import com.pge.krakencis.exceptions.ExternalServiceException;
+import com.pge.krakencis.exceptions.RetryableException;
 import com.pge.krakencis.logging.StructuredLogger;
+import com.pge.krakencis.security.JwtTokenProvider;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -15,57 +18,86 @@ import org.springframework.web.client.RestClient.RequestBodySpec;
 import java.net.URI;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+
+//OpenTelemetry 
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
+
 
 /**
  * Common HTTP sender for all outbound calls (REST JSON and SOAP XML).
  *
  * <h3>Retry strategy</h3>
  * <p>Transient failures — connection errors and HTTP status codes in
- * {@code http.client.retry.retryable-status-codes} (default: 429, 500, 502, 503, 504) —
- * are retried up to {@code http.client.retry.max-attempts} times using exponential
- * back-off ({@code initialDelayMs × backoffMultiplier^n}, capped at {@code maxDelayMs}).
- * Individual service endpoints can override the attempt count via
- * {@link HttpOutboundRequest#getMaxRetryAttempts()}.
+ * {@code http.client.retry.retryable-status-codes} — are retried up to
+ * {@code http.client.retry.max-attempts} times using exponential back-off
+ * ({@code initialDelayMs × backoffMultiplier^n}, capped at {@code maxDelayMs}).
  *
- * <h3>Failure routing</h3>
+ * <h3>Exception contract — callers route to Kafka topics based on these</h3>
  * <pre>
  *   send()
  *     ├─ attempt 1..N  (in-process, exponential back-off)
- *     │    ├─ HTTP 2xx           → return success
- *     │    ├─ retryable error    → wait &amp; retry
- *     │    └─ non-retryable 4xx  → publish to DLQ → throw
- *     └─ retries exhausted       → publish to retry-queue → throw
+ *     │    ├─ HTTP 2xx            → return HttpOutboundResponse (success)
+ *     │    ├─ retryable error     → wait and retry
+ *     │    └─ non-retryable 4xx  → throw ExternalServiceException
+ *     │                             (Camel route → DLQ immediately)
+ *     └─ retries exhausted        → throw RetryableException
+ *                                   (Camel route → route-specific retry topic)
  * </pre>
  *
- * <h3>Kafka topics</h3>
- * <ul>
- *   <li>{@code http.client.retry-topic} — transient failures after in-process retries</li>
- *   <li>{@code http.client.dlq-topic}   — permanent failures (non-retryable or manual)</li>
- * </ul>
+ * <p>Kafka routing is intentionally NOT done here — it is the responsibility of the
+ * Camel Kafka consumer route's {@code onException} handlers in
+ * {@link com.pge.krakencis.routes.BaseKafkaConsumerRoute}. This keeps HTTP and
+ * messaging concerns separate and ensures each flow routes to its own retry topic
+ * (e.g. {@code kraken-rcdc-retry-events} vs {@code kraken-rcdc-hes-retry-events}).
  */
 @Service
 public class HttpClientService {
 
+    private static final Tracer tracer = GlobalOpenTelemetry.getTracer("kraken-http-client");
+
     private static final StructuredLogger log = StructuredLogger.of(HttpClientService.class);
+
+    // ── Metric names ──────────────────────────────────────────────────────────
+    static final String METRIC_HTTP_REQUESTS  = "http.outbound.requests";
+    static final String METRIC_HTTP_DURATION  = "http.outbound.duration";
+    static final String METRIC_HTTP_RETRIES   = "http.outbound.retries";
+    static final String METRIC_HTTP_EXHAUSTED = "http.outbound.exhausted";
 
     private final RestClient           restClient;
     private final HttpClientProperties httpClientProperties;
-    private final DlqPublisher         dlqPublisher;
+    private final JwtTokenProvider     jwtTokenProvider;
+    private final MeterRegistry        meterRegistry;
 
-    public HttpClientService(HttpClientProperties httpClientProperties,
-                              DlqPublisher         dlqPublisher) {
+    /**
+     * @param restClientBuilder Spring Boot auto-configures this RestClient builder.
+     *   <p>OpenTelemetry Java Agent Migration — Native SDK removed / Instrumentation
+     *   provided by Java Agent. Outbound HTTP calls are now instrumented by the
+     *   OpenTelemetry Java Agent, which creates a CLIENT span per call and propagates
+     *   the W3C {@code traceparent} header to downstream services automatically.
+     *   HTTP client metrics continue to be recorded via Micrometer.
+     */
+    public HttpClientService(RestClient.Builder    restClientBuilder,
+                              HttpClientProperties  httpClientProperties,
+                              JwtTokenProvider      jwtTokenProvider,
+                              MeterRegistry         meterRegistry) {
         this.httpClientProperties = httpClientProperties;
-        this.dlqPublisher         = dlqPublisher;
-        this.restClient           = RestClient.builder().build();
+        this.jwtTokenProvider     = jwtTokenProvider;
+        this.meterRegistry        = meterRegistry;
+        this.restClient           = restClientBuilder.build();
     }
 
     /**
-     * Sends an HTTP request with automatic retry and Kafka failure routing.
+     * Sends an HTTP request with automatic in-process retry on transient failures.
      *
      * @param request       protocol-agnostic request descriptor
      * @param correlationId end-to-end trace ID propagated to all log lines and headers
-     * @return successful response (always HTTP 2xx)
-     * @throws ExternalServiceException after all retries are exhausted or for non-retryable errors
+     * @return successful response (HTTP 2xx)
+     * @throws ExternalServiceException for non-retryable HTTP 4xx errors
+     * @throws RetryableException       when all in-process retries are exhausted on transient errors
      */
     public HttpOutboundResponse send(HttpOutboundRequest request, String correlationId) {
         Assert.notNull(request, "HttpOutboundRequest must not be null");
@@ -84,46 +116,71 @@ public class HttpClientService {
                 lastError = e;
 
                 if (!isRetryable(e.getHttpStatusCode())) {
+                    // Non-retryable 4xx — permanent failure, Camel route will send to DLQ
                     log.error("httpOutboundNonRetryable", correlationId, e,
-                        "service",     request.getServiceName(),
-                        "url",         request.getUrl(),
-                        "httpStatus",  e.getHttpStatusCode(),
-                        "attempt",     attempt);
-                    dlqPublisher.publishToDlq(request, e, correlationId, attempt, maxAttempts);
+                        "service",    request.getServiceName(),
+                        "url",        request.getUrl(),
+                        "httpStatus", e.getHttpStatusCode(),
+                        "attempt",    attempt);
                     throw e;
                 }
 
                 if (attempt < maxAttempts) {
+                    meterRegistry.counter(METRIC_HTTP_RETRIES,
+                        "service", request.getServiceName()).increment();
                     log.warn("httpOutboundRetrying", correlationId,
-                        "service",      request.getServiceName(),
-                        "url",          request.getUrl(),
-                        "httpStatus",   e.getHttpStatusCode(),
-                        "attempt",      attempt,
-                        "maxAttempts",  maxAttempts,
-                        "nextDelayMs",  delayMs);
+                        "service",     request.getServiceName(),
+                        "url",         request.getUrl(),
+                        "httpStatus",  e.getHttpStatusCode(),
+                        "attempt",     attempt,
+                        "maxAttempts", maxAttempts,
+                        "nextDelayMs", delayMs);
                     sleep(delayMs, correlationId);
                     delayMs = nextDelay(delayMs);
                 }
             }
         }
 
-        if (lastError == null) {
-            // Defensive: should not be reachable when maxAttempts >= 1
-            throw ExternalServiceException.unavailable(request.getUrl(), correlationId, null);
-        }
+        // All in-process retries exhausted — throw RetryableException so the Camel
+        // Kafka consumer route routes to the flow-specific retry topic
+        // (e.g. kraken-rcdc-retry-events, kraken-rcdc-hes-retry-events).
+        //
+        // IMPORTANT: do NOT pass lastError (ExternalServiceException) as the cause.
+        // Camel's onException handler traverses the full cause chain — if ExternalServiceException
+        // appears anywhere in it, onException(ExternalServiceException) matches first and
+        // routes to DLQ instead of the retry topic.
+        meterRegistry.counter(METRIC_HTTP_EXHAUSTED,
+            "service", request.getServiceName()).increment();
         log.error("httpOutboundRetriesExhausted", correlationId, lastError,
             "service",     request.getServiceName(),
             "url",         request.getUrl(),
-            "maxAttempts", maxAttempts);
-        dlqPublisher.publishToRetryQueue(request, lastError, correlationId, maxAttempts, maxAttempts);
-        throw lastError;
+            "maxAttempts", maxAttempts,
+            "lastStatus",  lastError != null ? lastError.getHttpStatusCode() : null);
+        throw new RetryableException(
+            ErrorCode.TRANSIENT_ERROR,
+            "All " + maxAttempts + " HTTP attempts failed for " + request.getServiceName()
+                + " at " + request.getUrl()
+                + (lastError != null ? " — last HTTP status: " + lastError.getHttpStatusCode() : ""),
+            correlationId,
+            maxAttempts);
     }
 
     // ── private ───────────────────────────────────────────────────────────────
 
+    
     private HttpOutboundResponse doSend(HttpOutboundRequest request, String correlationId,
                                          int attempt, int maxAttempts) {
         long startTime = System.currentTimeMillis();
+        Span span = tracer.spanBuilder(request.getServiceName())
+                  .startSpan();
+
+        log.info("OTEL_SPAN_CREATED",
+    correlationId,
+    "service", request.getServiceName());
+    
+        span.setAttribute("outbound.service", request.getServiceName());
+        span.setAttribute("http.url", request.getUrl());
+        span.setAttribute("http.method", request.getMethod());
 
         log.debug("httpOutboundAttempt", correlationId,
             "service",     request.getServiceName(),
@@ -133,7 +190,7 @@ public class HttpClientService {
             "attempt",     attempt,
             "maxAttempts", maxAttempts);
 
-        try {
+        try (Scope scope = span.makeCurrent()){
             String url         = Objects.requireNonNull(request.getUrl(),         "url");
             String method      = Objects.requireNonNull(request.getMethod(),      "method");
             String contentType = Objects.requireNonNull(request.getContentType(), "contentType");
@@ -145,7 +202,8 @@ public class HttpClientService {
                 .method(HttpMethod.valueOf(method))
                 .uri(uri)
                 .contentType(MediaType.parseMediaType(contentType))
-                .header("X-Correlation-ID", corrHdr);
+                .header("X-Correlation-ID",  corrHdr)
+                .header("Authorization",      jwtTokenProvider.bearerHeader());
 
             request.getHeaders().forEach((k, v) -> spec.header(k, Objects.requireNonNull(v, k)));
 
@@ -167,6 +225,15 @@ public class HttpClientService {
             long duration = System.currentTimeMillis() - startTime;
             int  status   = response.getStatusCode().value();
 
+            meterRegistry.counter(METRIC_HTTP_REQUESTS,
+                "service",  request.getServiceName(),
+                "httpStatus", String.valueOf(status),
+                "outcome",  "success").increment();
+            meterRegistry.timer(METRIC_HTTP_DURATION,
+                "service", request.getServiceName(),
+                "outcome", "success")
+                .record(duration, TimeUnit.MILLISECONDS);
+
             log.info("httpOutboundCompleted", correlationId,
                 "service",    request.getServiceName(),
                 "url",        url,
@@ -182,6 +249,14 @@ public class HttpClientService {
 
         } catch (ExternalServiceException e) {
             long duration = System.currentTimeMillis() - startTime;
+            meterRegistry.counter(METRIC_HTTP_REQUESTS,
+                "service",    request.getServiceName(),
+                "httpStatus", String.valueOf(e.getHttpStatusCode()),
+                "outcome",    "failure").increment();
+            meterRegistry.timer(METRIC_HTTP_DURATION,
+                "service", request.getServiceName(),
+                "outcome", "failure")
+                .record(duration, TimeUnit.MILLISECONDS);
             log.warn("httpOutboundAttemptFailed", correlationId,
                 "service",    request.getServiceName(),
                 "url",        request.getUrl(),
@@ -193,6 +268,14 @@ public class HttpClientService {
 
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - startTime;
+            meterRegistry.counter(METRIC_HTTP_REQUESTS,
+                "service",    request.getServiceName(),
+                "httpStatus", "0",
+                "outcome",    "failure").increment();
+            meterRegistry.timer(METRIC_HTTP_DURATION,
+                "service", request.getServiceName(),
+                "outcome", "failure")
+                .record(duration, TimeUnit.MILLISECONDS);
             log.warn("httpOutboundConnectionFailed", correlationId, e,
                 "service",    request.getServiceName(),
                 "url",        request.getUrl(),
@@ -201,8 +284,12 @@ public class HttpClientService {
                 "error",      e.getMessage());
             throw ExternalServiceException.unavailable(request.getUrl(), correlationId, e);
         }
+        finally {
+            span.end();
+        }
     }
-
+    
+    
     private int resolveMaxAttempts(HttpOutboundRequest request) {
         Integer override = request.getMaxRetryAttempts();
         return override != null ? override : httpClientProperties.getRetry().getMaxAttempts();

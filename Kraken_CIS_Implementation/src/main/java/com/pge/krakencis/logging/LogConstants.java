@@ -40,5 +40,29 @@ public final class LogConstants {
     public static final String PROP_SERVICE_NAME    = "serviceName";
     public static final String PROP_RETRY_ATTEMPT   = "retryAttempt";
 
+    // Profile Reads CSV partial-failure exchange property
+    // Value type: List<com.pge.krakencis.models.profilereads.ProfileReadFailedRow>
+    public static final String PROP_FAILED_ROWS     = "profileReads.failedRows";
+
+    // Profile Reads CSV processing counts — set by ProfileReadsCsvProcessor
+    public static final String PROP_TOTAL_ROWS      = "profileReads.totalRows";
+    public static final String PROP_SUCCESS_ROWS    = "profileReads.successRows";
+
+    // Profile Reads file-level status — set by the route on success/partial/corrupted
+    public static final String PROP_FILE_STATUS        = "profileReads.fileStatus";
+    public static final String PROP_FILE_ERROR_MESSAGE = "profileReads.fileErrorMessage";
+
+    // Profile Reads file status values
+    public static final String FILE_STATUS_SUCCESS          = "SUCCESS";
+    public static final String FILE_STATUS_PARTIAL_FAILURE  = "PARTIAL_FAILURE";
+    public static final String FILE_STATUS_CORRUPTED        = "CORRUPTED";
+
+    // OpenTelemetry Java Agent Migration: MDC keys written by the Java Agent's
+    // logback-mdc instrumentation when a span is active (was traceId/spanId from
+    // the removed Micrometer Tracing bridge). The PROP_OTEL_SPAN/SCOPE exchange
+    // properties were removed — span lifecycle is now owned by the Java Agent.
+    public static final String MDC_TRACE_ID         = "trace_id";
+    public static final String MDC_SPAN_ID          = "span_id";
+
     private LogConstants() {}
 }

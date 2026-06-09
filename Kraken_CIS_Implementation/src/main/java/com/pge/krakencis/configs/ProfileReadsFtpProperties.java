@@ -36,7 +36,26 @@ public class ProfileReadsFtpProperties {
     /** Idempotent file-name repository to prevent duplicate processing on re-upload. */
     private boolean            idempotent          = true;
 
+    /**
+     * Maximum allowed file size in megabytes. Files exceeding this are rejected
+     * before parsing starts — prevents OOM from unexpectedly large uploads.
+     */
+    private int                maxFileSizeMb       = 100;
+
+    /**
+     * Number of parsed CSV rows published to Kafka per batch.
+     * Bounds memory usage to {@code kafkaBatchSize × sizeof(KafkaProfileReadPayload)}
+     * regardless of how many rows the file contains.
+     */
+    private int                kafkaBatchSize      = 500;
+
     public String buildUri() {
+        // noop=true — Camel leaves the remote file untouched after the exchange completes.
+        // The route performs the archive/error move manually via FTPClient so that a move
+        // failure can be caught and logged without failing the exchange. With the old
+        // move=.done approach, a post-processing move failure caused Camel to roll back the
+        // idempotent entry, making the file eligible for reprocessing on the next poll
+        // (duplicate Kafka messages). noop=true prevents that rollback entirely.
         return connection.buildBaseUri() + normalizeDirectory(remoteDirectory)
             + "?username=" + connection.getUsername()
             + "&password=" + connection.getPassword()
@@ -47,10 +66,9 @@ public class ProfileReadsFtpProperties {
             + "&delay=" + delayMs
             + "&maxMessagesPerPoll=" + maxMessagesPerPoll
             + "&idempotent=" + idempotent
-            + "&move=" + normalizeMovePath(moveDirectory)
+            + "&noop=true"
             + "&readLock=" + readLock
-            + "&readLockMinAge=" + readLockMinAgeMs
-            + "&moveFailed=" + normalizeMovePath(errorDirectory);
+            + "&readLockMinAge=" + readLockMinAgeMs;
     }
 
     private String normalizeDirectory(String directory) {
@@ -60,21 +78,4 @@ public class ProfileReadsFtpProperties {
         return directory.startsWith("/") ? directory : "/" + directory;
     }
 
-    private String normalizeMovePath(String movePath) {
-        if (movePath == null || movePath.isBlank()) {
-            return ".done";
-        }
-        return movePath;
-    }
-
-    public String normalizeErrorDirectory(String errorPath) {
-        if (errorPath == null || errorPath.isBlank()) {
-            return ".error";
-        }
-        return errorPath.startsWith("/") ? errorPath : "/" + errorPath;
-    }
-
-    public String buildErrorUri() {
-        return connection.buildBaseUri() + normalizeErrorDirectory(errorDirectory);
-    }
 }

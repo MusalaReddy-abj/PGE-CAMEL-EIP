@@ -19,7 +19,7 @@ import java.util.List;
  * <pre>
  * {
  *   "externalId":  "AW8003090",       // from CSV: mRID
- *   "sourceHes":   "SENSUS",          // constant
+ *   "sourceHes":   "TRILLIANT",          // constant
  *   "profileName": "INTERVAL_READS",  // constant
  *   "registers": [
  *     {
@@ -44,7 +44,7 @@ public class KafkaProfileReadPayload {
     /** From CSV column: mRID */
     private String externalId;
 
-    /** Hardcoded constant: "SENSUS" */
+    /** Hardcoded constant: "TRILLIANT" */
     private String sourceHes;
 
     /** Hardcoded constant: "INTERVAL_READS" */

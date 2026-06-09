@@ -67,6 +67,13 @@
             <artifactId>camel-kafka-starter</artifactId>
         </dependency>
 
+        <!-- AWS MSK IAM authentication (SASL/IAM for MSK public endpoints on port 9198) -->
+        <dependency>
+            <groupId>software.amazon.msk</groupId>
+            <artifactId>aws-msk-iam-auth</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+
         <!-- Camel OpenAPI (Swagger docs via /api-doc) -->
         <dependency>
             <groupId>org.apache.camel.springboot</groupId>
@@ -127,6 +134,12 @@
             <artifactId>camel-ftp-starter</artifactId>
         </dependency>
 
+        <!-- Camel AWS S3 (Profile Reads S3 polling) -->
+        <dependency>
+            <groupId>org.apache.camel.springboot</groupId>
+            <artifactId>camel-aws2-s3-starter</artifactId>
+        </dependency>
+
         <!-- Camel Quartz (Scheduling) -->
         <dependency>
             <groupId>org.apache.camel.springboot</groupId>
@@ -137,6 +150,30 @@
         <dependency>
             <groupId>org.apache.camel.springboot</groupId>
             <artifactId>camel-micrometer-starter</artifactId>
+        </dependency>
+
+        <!-- Prometheus Micrometer Registry — exposes /actuator/prometheus scrape endpoint -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- ─────────────────────────────────────────────────────────────────────
+             OpenTelemetry Java Agent Migration
+             Native SDK removed / Instrumentation provided by Java Agent.
+             All auto-instrumentation (Spring Boot, Camel, Kafka producer/consumer,
+             HTTP clients, REST/Undertow) and OTLP export are now supplied by the
+             OpenTelemetry Java Agent attached in the Dockerfile — NOT by the app.
+             Removed: micrometer-tracing-bridge-otel, camel-observation-starter,
+             opentelemetry-exporter-otlp, opentelemetry-sdk, opentelemetry-context,
+             opentelemetry-semconv.
+             Retained: opentelemetry-api ONLY — used by logging.SpanEnricher to
+             rename/attribute the Agent's active spans. Version managed by the Spring
+             Boot BOM (version-less) so it aligns with the Agent's OTel version.
+             ───────────────────────────────────────────────────────────────────── -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-api</artifactId>
         </dependency>
 
         <!-- Logstash JSON encoder -->

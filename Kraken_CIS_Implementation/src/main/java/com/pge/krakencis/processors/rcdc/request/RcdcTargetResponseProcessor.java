@@ -39,12 +39,13 @@ public class RcdcTargetResponseProcessor extends BaseProcessor {
         log.warn("rcdcTargetCallFailed", correlationId,
             "httpStatus", status, "responseBody", responseBody);
 
-        // 5xx, 408 (timeout), 429 (rate-limit), 0 (connection failure) → retryable
-        if (status == 0 || status >= 500 || status == 408 || status == 429) {
+        // Retryable: 5xx, 408 (timeout), 429 (rate-limit), 404 (service not found — may be transient),
+        // 0 (connection failure)
+        if (status == 0 || status >= 500 || status == 408 || status == 429 || status == 404) {
             throw RetryableException.transient_(
                 SERVICE_NAME + " returned HTTP " + status, correlationId);
         }
-        // 4xx client errors → permanent failure, goes to DLQ
+        // All other 4xx → permanent client error, goes to DLQ
         throw ExternalServiceException.httpError(SERVICE_NAME, status, responseBody, correlationId);
     }
 }

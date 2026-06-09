@@ -5,51 +5,67 @@ import com.pge.krakencis.models.rcdc.response.RcdcHesResponseMessage;
 import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
 @Component
 public class RcdcMdmNotificationMapper {
 
-    private static final StructuredLogger  log      = StructuredLogger.of(RcdcMdmNotificationMapper.class);
-    private static final String            SOURCE   = "KRAKEN-CIS";
-    private static final DateTimeFormatter ISO_DT   = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
+    private static final StructuredLogger  log    = StructuredLogger.of(RcdcMdmNotificationMapper.class);
+    private static final DateTimeFormatter ISO_DT = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
 
-    private static final String NAMESPACES =
-        "xmlns=\"http://www.iec.ch/TC57/2008/schema/message\" " +
-        "xmlns:ns2=\"http://iec.ch/TC57/2009/EndDeviceAssets#\" " +
-        "xmlns:ns3=\"http://www.trilliantinc.com/SEAL/1.0/dt025pvvnl\"";
+    // Response header constants for the CM-ChangeRCDSwitchStateResp envelope.
+    private static final String VERB = "REPLY";
+    private static final String NOUN = "DefaultResponse";
+
+    // SOAP / Oracle OUAF / Trilliant namespaces for the response envelope.
+    private static final String SOAP_NS  = "http://schemas.xmlsoap.org/soap/envelope/";
+    private static final String RESP_NS  = "http://ouaf.oracle.com/webservices/cm/CM-ChangeRCDSwitchStateResp";
+    private static final String JCA_NS   = "http://xmlns.oracle.com/pcbpel/wsdl/jca/";
+    private static final String ASSET_NS = "http://iec.ch/TC57/2009/EndDeviceAssets#";
+    private static final String NS1_NS   = "http://xmlns.oracle.com/pcbpel/adapter/jms/TrilliantSOAApplication/TrilliantRCDCAsyncRespFromHESToMDM/ConsumeResponseFromTrilliant";
+    private static final String BASIC_NS = "http://www.trilliantinc.com/SEAL/1.0/BasicTypes";
+    private static final String SEAL_NS  = "http://www.trilliantinc.com/SEAL/1.0/dt025pvvnl";
 
     public String toSoapXml(RcdcHesResponseMessage response, String correlationId) {
-        String mRID      = response.getPayload().getDefaultResponse()
-                                    .getEndDeviceAsset().getMRID();
         String replyCode = response.getReply().getReplyCode();
-        String timestamp = OffsetDateTime.now().format(ISO_DT);
+        String timestamp = OffsetDateTime.now(ZoneOffset.UTC).format(ISO_DT);
 
-        log.info("rcdcMdmNotificationMapped", correlationId, "mRID", mRID, "replyCode", replyCode);
-        return buildXml(correlationId, mRID, replyCode, timestamp);
+        log.info("rcdcMdmNotificationMapped", correlationId, "replyCode", replyCode);
+        return buildXml(correlationId, replyCode, timestamp);
     }
 
-    private String buildXml(String correlationId, String mRID, String replyCode, String timestamp) {
+    private String buildXml(String correlationId, String replyCode, String timestamp) {
+        String cid = escapeXml(correlationId);
         return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-            + "<RequestMessage " + NAMESPACES + ">\n"
-            + "  <Header>\n"
-            + "    <Verb>CHANGE</Verb>\n"
-            + "    <Noun>RCDSwitchState</Noun>\n"
-            + "    <Timestamp>" + timestamp + "</Timestamp>\n"
-            + "    <Source>" + SOURCE + "</Source>\n"
-            + "    <CorrelationID>" + escapeXml(correlationId) + "</CorrelationID>\n"
-            + "  </Header>\n"
-            + "  <Reply>\n"
-            + "    <ReplyCode>" + escapeXml(replyCode) + "</ReplyCode>\n"
-            + "  </Reply>\n"
-            + "  <Payload>\n"
-            + "    <ns3:RCDSwitchState>\n"
-            + "      <ns3:EndDeviceAsset>\n"
-            + "        <ns2:mRID>" + escapeXml(mRID) + "</ns2:mRID>\n"
-            + "      </ns3:EndDeviceAsset>\n"
-            + "    </ns3:RCDSwitchState>\n"
-            + "  </Payload>\n"
-            + "</RequestMessage>";
+            + "<soapenv:Envelope xmlns:soapenv=\"" + SOAP_NS + "\">\n"
+            + "  <soapenv:Header/>\n"
+            + "  <soapenv:Body>\n"
+            + "    <CM-ChangeRCDSwitchStateResp"
+            + " xmlns=\""      + RESP_NS  + "\""
+            + " xmlns:jca=\""  + JCA_NS   + "\""
+            + " xmlns:ns2=\""  + ASSET_NS + "\""
+            + " xmlns:ns1=\""  + NS1_NS   + "\""
+            + " xmlns:ns4=\""  + BASIC_NS + "\""
+            + " xmlns:ns3=\""  + SEAL_NS  + "\""
+            + " xmlns:tns=\""  + RESP_NS  + "\""
+            + ">\n"
+            + "      <tns:transactionId>" + cid + "</tns:transactionId>\n"
+            + "      <tns:responseDetail>\n"
+            + "        <tns:header>\n"
+            + "          <tns:verb>" + VERB + "</tns:verb>\n"
+            + "          <tns:noun>" + NOUN + "</tns:noun>\n"
+            + "          <tns:correlationID>" + cid + "</tns:correlationID>\n"
+            + "          <tns:timeStamp>" + timestamp + "</tns:timeStamp>\n"
+            + "        </tns:header>\n"
+            + "        <tns:reply>\n"
+            + "          <tns:replyCode>" + escapeXml(replyCode) + "</tns:replyCode>\n"
+            + "        </tns:reply>\n"
+            + "        <tns:payLoad/>\n"
+            + "      </tns:responseDetail>\n"
+            + "    </CM-ChangeRCDSwitchStateResp>\n"
+            + "  </soapenv:Body>\n"
+            + "</soapenv:Envelope>";
     }
 
     private String escapeXml(String v) {

@@ -1,6 +1,6 @@
 kafka:
   producer:
-    brokers: 192.168.4.34:9092
+    brokers: b-1-public.pgeintegrationdemo.37vkb5.c2.kafka.ap-south-2.amazonaws.com:9198,b-2-public.pgeintegrationdemo.37vkb5.c2.kafka.ap-south-2.amazonaws.com:9198,b-3-public.pgeintegrationdemo.37vkb5.c2.kafka.ap-south-2.amazonaws.com:9198
     acks: all
     retries: 3
     request-timeout-ms: 30000
@@ -8,6 +8,15 @@ kafka:
     compression-type: lz4
     key-serializer: org.apache.kafka.common.serialization.StringSerializer
     value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    # With acks=all and retries>0, cap in-flight requests to 5 to prevent
+    # out-of-order delivery across retries (effective idempotent delivery).
+    max-in-flight-request: 5
+    # ── AWS MSK IAM auth (port 9198 = SASL/IAM public endpoint) ──────────────
+    # Port 9192=plaintext-public  9194=TLS-public  9196=SCRAM-public  9198=IAM-public
+    security-protocol: SASL_SSL
+    sasl-mechanism: AWS_MSK_IAM
+    sasl-jaas-config: "software.amazon.msk.auth.iam.IAMLoginModule required;"
+    sasl-client-callback-handler-class: software.amazon.msk.auth.iam.IAMClientCallbackHandler
 
   consumer:
     group-id: kraken-cis-group
@@ -15,13 +24,45 @@ kafka:
     enable-auto-commit: false
     max-poll-records: 500
     session-timeout-ms: 30000
+    # Number of consumer threads per route per pod (Camel 4.x: consumersCount URI param).
+    # Increase to scale throughput vertically within a single JVM.
+    # Rule: consumers-count × maxPollRecords <= partition count for safe parallelism.
+    consumers-count: 2
+    # Prevent session timeout when processing large batches (max-poll-records=500)
+    max-poll-interval-ms: 300000
+    heartbeat-interval-ms: 10000
+    # Security is sourced from kafka.producer.* and applied via KafkaProducerConfig.buildSecurityQueryString()
+
 
   topic:
     alarms:             kraken-alarm-events
     rcdc:               kraken-rcdc-events
     rcdc-retry:         kraken-rcdc-retry-events
     rcdc-dlq:           kraken-rcdc-dlq-events
+    rcdc-parking:       kraken-rcdc-parking-events
     rcdc-hes-response:  kraken-rcdc-hes-response-events
     rcdc-hes-retry:     kraken-rcdc-hes-retry-events
     rcdc-hes-dlq:       kraken-rcdc-hes-dlq-events
-    profile-reads:      kraken-profile-reads-events
+    rcdc-hes-parking:   kraken-rcdc-hes-parking-events
+    profile-reads:         kraken-profile-reads-events
+    profile-reads-dlq:     kraken-profile-reads-dlq-events
+    profile-reads-parking: kraken-profile-reads-parking-events
+    profile-reads-audit:   kraken-profile-reads-audit-events
+
+# Retry-queue consumer — delay between retry-queue attempts (back-off)
+retry:
+  queue:
+    max-attempts: 3          # re-entries into retry queue before final DLQ
+    poll-delay-ms: 60000    # 5 min — slow poll IS the back-off delay
+
+# Automatic DLQ replay (DlqReplayRoute) — OPT-IN, disabled by default.
+# When enabled, transient-failure DLQ messages are periodically replayed back to
+# their source topic (capped by max-replays); permanent errors and exhausted
+# replays are moved to the *-parking topic for manual review. See DlqReplayRoute.
+dlq:
+  replay:
+    enabled: true            # automatic replay ON
+    interval-ms: 60000     # 30 min between replay runs
+    initial-delay-ms: 30000  # first run 30 s after startup (not a full interval later)
+    max-messages-per-run: 100
+    max-replays: 3           # transient replays before parking

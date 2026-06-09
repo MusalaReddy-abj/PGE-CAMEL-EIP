@@ -7,8 +7,8 @@
     <!-- ── Console (human-readable, dev/test) ─────────────────────────────── -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36}
-                [%X{correlationId:-}] [%X{routeId:-}] - %msg%n</pattern>
+            <!-- correlationId | traceId | spanId | routeId | sourceSystem→targetSystem -->
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{30} [cid=%X{correlationId:-?}] [tid=%X{traceId:-?} sid=%X{spanId:-?}] [%X{routeId:-?}] [%X{sourceSystem:-%X{targetSystem:-}}] - %msg%n</pattern>
         </encoder>
     </appender>
 
@@ -42,12 +42,16 @@
             <maxHistory>30</maxHistory>
         </rollingPolicy>
         <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <!-- Correlation / route context -->
             <includeMdcKeyName>correlationId</includeMdcKeyName>
             <includeMdcKeyName>routeId</includeMdcKeyName>
             <includeMdcKeyName>exchangeId</includeMdcKeyName>
             <includeMdcKeyName>messageType</includeMdcKeyName>
             <includeMdcKeyName>sourceSystem</includeMdcKeyName>
             <includeMdcKeyName>targetSystem</includeMdcKeyName>
+            <!-- OTel / Micrometer Tracing span IDs (populated by micrometer-tracing-bridge-otel) -->
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
             <customFields>{"application":"${appName}"}</customFields>
         </encoder>
     </appender>

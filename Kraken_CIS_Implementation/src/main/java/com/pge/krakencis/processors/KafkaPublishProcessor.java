@@ -3,6 +3,7 @@ package com.pge.krakencis.processors;
 import com.pge.krakencis.logging.AuditLogger;
 import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.StructuredLogger;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.camel.Processor;
 import org.apache.camel.component.kafka.KafkaConstants;
 import org.springframework.stereotype.Component;
@@ -18,13 +19,29 @@ public class KafkaPublishProcessor {
 
     private static final StructuredLogger log = StructuredLogger.of(KafkaPublishProcessor.class);
 
-    private final AuditLogger auditLogger;
+    static final String METRIC_KAFKA_PUBLISH_ATTEMPTED = "kafka.publish.attempted";
+    static final String METRIC_KAFKA_PUBLISH_SUCCESS   = "kafka.publish.success";
 
-    public KafkaPublishProcessor(AuditLogger auditLogger) {
-        this.auditLogger = auditLogger;
+    private final AuditLogger    auditLogger;
+    private final MeterRegistry  meterRegistry;
+
+    public KafkaPublishProcessor(AuditLogger auditLogger, MeterRegistry meterRegistry) {
+        this.auditLogger   = auditLogger;
+        this.meterRegistry = meterRegistry;
     }
 
-    /** Sets KafkaConstants.KEY from KAFKA_KEY property and logs the send attempt. */
+    /**
+     * Sets the Kafka message key and propagates the correlation ID as a Kafka record
+     * header so downstream consumers can read it without parsing the message key.
+     *
+     * <p>Headers set on every published record:
+     * <ul>
+     *   <li>{@code CamelKafkaKey} (message key) — from {@code KAFKA_KEY} property,
+     *       or falls back to the correlation ID when not explicitly set.</li>
+     *   <li>{@code X-Correlation-ID} (record header) — always the correlation ID,
+     *       enabling trace-level correlation independent of the key.</li>
+     * </ul>
+     */
     public Processor prepare() {
         return exchange -> {
             String correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID,
@@ -32,13 +49,30 @@ public class KafkaPublishProcessor {
             String topic = exchange.getProperty(LogConstants.KAFKA_TOPIC, String.class);
             String key   = exchange.getProperty(LogConstants.KAFKA_KEY,   String.class);
 
-            if (key != null) {
-                exchange.getIn().setHeader(KafkaConstants.KEY, key);
+            // Use explicit key if set, otherwise fall back to correlationId so every
+            // message is keyed — guarantees ordered delivery per correlation ID.
+            String effectiveKey = (key != null) ? key : correlationId;
+            if (effectiveKey != null) {
+                exchange.getIn().setHeader(KafkaConstants.KEY, effectiveKey);
             }
 
+            // Propagate correlation ID as a Kafka record header for end-to-end tracing.
+            // Downstream consumers can read this header without parsing the message body.
+            if (correlationId != null) {
+                exchange.getIn().setHeader("X-Correlation-ID", correlationId);
+            }
+
+            // OpenTelemetry Java Agent Migration — Native SDK removed.
+            // The manual W3C traceparent injection (formerly ContextPropagationHelper) is
+            // removed; the Java Agent's Kafka-producer instrumentation injects the trace
+            // context into the record headers automatically. No business logic changes.
+
+            if (topic != null) {
+                meterRegistry.counter(METRIC_KAFKA_PUBLISH_ATTEMPTED, "topic", topic).increment();
+            }
             log.debug("kafkaSending", correlationId,
                 "topic", topic,
-                "key",   key != null ? key : "none");
+                "key",   effectiveKey != null ? effectiveKey : "none");
         };
     }
 
@@ -50,6 +84,9 @@ public class KafkaPublishProcessor {
             String topic = exchange.getProperty(LogConstants.KAFKA_TOPIC, String.class);
             String key   = exchange.getIn().getHeader(KafkaConstants.KEY, String.class);
 
+            if (topic != null) {
+                meterRegistry.counter(METRIC_KAFKA_PUBLISH_SUCCESS, "topic", topic).increment();
+            }
             auditLogger.logKafkaPublish(correlationId, topic, key, true);
         };
     }

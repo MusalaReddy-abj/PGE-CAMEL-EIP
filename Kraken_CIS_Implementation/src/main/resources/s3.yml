@@ -1,0 +1,21 @@
+aws:
+  s3:
+    profile-reads:
+      connection:
+        region: ap-south-2
+        # IAM role — no access-key or secret-key needed.
+        # buildUri() appends &useDefaultCredentialsProvider=true when this is true.
+        use-default-credentials: true
+      bucket-name: pge-int-demo
+      source-prefix: Reads/profilereads/    # matches s3://pge-int-demo/Reads/profilereads/
+      archive-prefix: Reads/Archive/         # matches s3://pge-int-demo/Reads/Archive/
+      error-prefix: Reads/Error/             # matches s3://pge-int-demo/Reads/Error/
+      delay-ms: 60000
+      max-messages-per-poll: 50
+      thread-pool-size: 4
+
+camel:
+  component:
+    aws2-s3:
+      region: ${aws.s3.profile-reads.connection.region}
+      use-default-credentials-provider: ${aws.s3.profile-reads.connection.use-default-credentials:true}

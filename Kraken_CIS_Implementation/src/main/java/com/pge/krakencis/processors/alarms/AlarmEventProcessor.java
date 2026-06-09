@@ -8,6 +8,7 @@ import com.pge.krakencis.models.alarms.AlarmEvent;
 import com.pge.krakencis.models.alarms.AlarmRequest;
 import com.pge.krakencis.models.KrakenEvent;
 import com.pge.krakencis.processors.BaseProcessor;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.camel.Exchange;
 import org.springframework.stereotype.Component;
 
@@ -31,10 +32,15 @@ public class AlarmEventProcessor extends BaseProcessor {
 
     private static final StructuredLogger structLog = StructuredLogger.of(AlarmEventProcessor.class);
 
-    private final AlarmEventMapper alarmEventMapper;
+    static final String METRIC_BUSINESS_REQUESTS = "business.transaction.requests";
+    static final String METRIC_BUSINESS_EVENTS   = "business.transaction.events";
 
-    public AlarmEventProcessor(AlarmEventMapper alarmEventMapper) {
+    private final AlarmEventMapper alarmEventMapper;
+    private final MeterRegistry    meterRegistry;
+
+    public AlarmEventProcessor(AlarmEventMapper alarmEventMapper, MeterRegistry meterRegistry) {
         this.alarmEventMapper = alarmEventMapper;
+        this.meterRegistry    = meterRegistry;
     }
 
     @Override
@@ -52,6 +58,14 @@ public class AlarmEventProcessor extends BaseProcessor {
 
         List<KrakenEvent> krakenEvents = alarmEventMapper.toKrakenEvents(events, correlationId);
         structLog.info("alarmEventsMapped", correlationId, "mappedCount", krakenEvents.size());
+
+        meterRegistry.counter(METRIC_BUSINESS_REQUESTS,
+            "flow", "ALARMS",
+            "verb", request.getHeader().getVerb(),
+            "noun", request.getHeader().getNoun()).increment();
+        meterRegistry.counter(METRIC_BUSINESS_EVENTS,
+            "flow", "ALARMS").increment(krakenEvents.size());
+
         exchange.getIn().setBody(krakenEvents);
     }
 
