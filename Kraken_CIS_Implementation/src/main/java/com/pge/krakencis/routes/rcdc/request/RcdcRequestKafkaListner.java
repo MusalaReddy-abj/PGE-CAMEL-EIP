@@ -77,11 +77,10 @@ public class RcdcRequestKafkaListner extends BaseKafkaConsumerRoute {
             .process(exchange -> exchange.setProperty(
                 LogConstants.PROP_ORIGINAL_BODY, exchange.getIn().getBody(String.class)))
             .process(exchange -> extractCorrelationId(exchange, "rcdcMessageConsumed"))
-            // OpenTelemetry Integration — KAFKA_CONSUME stage span, parented to the producer's
-            // trace via the traceparent record header. Trace visible in Jaeger. No business logic changes.
-            .process(exchange -> com.pge.krakencis.observability.TracingHelper
-                .recordStageWithExtractedParent(exchange,
-                    com.pge.krakencis.observability.TracingConstants.SPAN_KAFKA_CONSUME))
+            // OpenTelemetry Java Agent Migration — Native SDK removed.
+            // The custom KAFKA_CONSUME stage span (formerly via TracingHelper) is removed;
+            // the Java Agent's Kafka-consumer instrumentation creates the consume span and
+            // links it to the producer trace automatically. No business logic changes.
             .process(routeLoggingProcessor.entry(OPERATION))
             .process(rcdcTargetCallProcessor)
             .process(rcdcTargetResponseProcessor)

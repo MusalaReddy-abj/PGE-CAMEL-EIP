@@ -33,45 +33,33 @@ public class RcdcTargetCallProcessor extends BaseProcessor {
         String jsonPayload   = exchange.getIn().getBody(String.class);
         String correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
 
-        // OpenTelemetry Integration — EXTERNAL_SERVICE_CALL span around the outbound HES call,
-        // parented to the producer's trace. The outer try/catch only records exceptions on the
-        // span and re-throws them unchanged; control flow and error routing are identical to before.
-        // Trace visible in Jaeger. No business logic changes.
-        com.pge.krakencis.observability.TracingHelper.SpanInScope otelCall =
-            com.pge.krakencis.observability.TracingHelper.startExternalCall(
-                exchange, com.pge.krakencis.observability.TracingConstants.SPAN_EXTERNAL_SERVICE_CALL);
+        // OpenTelemetry Java Agent Migration — Native SDK removed.
+        // The custom EXTERNAL_SERVICE_CALL span (formerly wrapping this call via TracingHelper /
+        // ExceptionTracingHelper) is removed; the Java Agent's HTTP-client instrumentation creates
+        // and exports the outbound-call span automatically. Control flow and error routing below
+        // are unchanged. No business logic changes.
         try {
-            try {
-                int statusCode = soaRcdcRequestService.sendCommand(jsonPayload, correlationId);
-                exchange.getIn().setHeader(Exchange.HTTP_RESPONSE_CODE, statusCode);
-                log.debug("rcdcTargetCallDelegated", correlationId, "httpStatus", statusCode);
-            } catch (RetryableException e) {
-                // HttpClientService already exhausted its in-process retries and raised a
-                // RetryableException with no ExternalServiceException in the cause chain.
-                // Re-throw as-is so Camel routes it to the retry topic.
-                throw e;
-            } catch (Exception e) {
-                // Network-level failures (ConnectException, SocketTimeout, etc.)
-                // Pass the root network cause only — NOT the ExternalServiceException wrapper —
-                // so Camel's onException(ExternalServiceException) does not match the cause chain
-                // and route this to DLQ instead of the retry topic.
-                if (NetworkExceptionUtils.isNetworkException(e)) {
-                    Throwable networkCause = NetworkExceptionUtils.rootNetworkCause((Throwable) e);
-                    log.warn("rcdcTargetNetworkError", correlationId,
-                        "error", e.getMessage(), "exceptionType", e.getClass().getSimpleName());
-                    throw RetryableException.networkError(
-                        "Network error calling " + SERVICE_NAME, correlationId, networkCause);
-                }
-                throw e;
+            int statusCode = soaRcdcRequestService.sendCommand(jsonPayload, correlationId);
+            exchange.getIn().setHeader(Exchange.HTTP_RESPONSE_CODE, statusCode);
+            log.debug("rcdcTargetCallDelegated", correlationId, "httpStatus", statusCode);
+        } catch (RetryableException e) {
+            // HttpClientService already exhausted its in-process retries and raised a
+            // RetryableException with no ExternalServiceException in the cause chain.
+            // Re-throw as-is so Camel routes it to the retry topic.
+            throw e;
+        } catch (Exception e) {
+            // Network-level failures (ConnectException, SocketTimeout, etc.)
+            // Pass the root network cause only — NOT the ExternalServiceException wrapper —
+            // so Camel's onException(ExternalServiceException) does not match the cause chain
+            // and route this to DLQ instead of the retry topic.
+            if (NetworkExceptionUtils.isNetworkException(e)) {
+                Throwable networkCause = NetworkExceptionUtils.rootNetworkCause((Throwable) e);
+                log.warn("rcdcTargetNetworkError", correlationId,
+                    "error", e.getMessage(), "exceptionType", e.getClass().getSimpleName());
+                throw RetryableException.networkError(
+                    "Network error calling " + SERVICE_NAME, correlationId, networkCause);
             }
-        } catch (Exception traced) {
-            // OpenTelemetry Integration — record the failure on the span, then re-throw unchanged.
-            com.pge.krakencis.observability.ExceptionTracingHelper.recordException(
-                otelCall.span(), traced);
-            throw traced;
-        } finally {
-            // OpenTelemetry Integration — end the EXTERNAL_SERVICE_CALL span.
-            otelCall.close();
+            throw e;
         }
     }
 }

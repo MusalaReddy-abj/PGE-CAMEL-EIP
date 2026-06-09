@@ -64,11 +64,12 @@ public class HttpClientService {
     private final MeterRegistry        meterRegistry;
 
     /**
-     * @param restClientBuilder Spring Boot auto-configures this with:
-     *   - {@code ObservationRestClientCustomizer} → injects Micrometer Tracing observations
-     *     so every outbound call gets a child span and propagates {@code traceparent} /
-     *     {@code b3} headers to downstream services automatically.
-     *   - {@code MicrometerHttpClientObservationConvention} → records HTTP client metrics.
+     * @param restClientBuilder Spring Boot auto-configures this RestClient builder.
+     *   <p>OpenTelemetry Java Agent Migration — Native SDK removed / Instrumentation
+     *   provided by Java Agent. Outbound HTTP calls are now instrumented by the
+     *   OpenTelemetry Java Agent, which creates a CLIENT span per call and propagates
+     *   the W3C {@code traceparent} header to downstream services automatically.
+     *   HTTP client metrics continue to be recorded via Micrometer.
      */
     public HttpClientService(RestClient.Builder    restClientBuilder,
                               HttpClientProperties  httpClientProperties,

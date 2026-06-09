@@ -57,13 +57,12 @@ public final class LogConstants {
     public static final String FILE_STATUS_PARTIAL_FAILURE  = "PARTIAL_FAILURE";
     public static final String FILE_STATUS_CORRUPTED        = "CORRUPTED";
 
-    // OTel span/scope stored on exchange by MDCContextManager so exit() can close them
-    public static final String PROP_OTEL_SPAN       = "otel.span";
-    public static final String PROP_OTEL_SCOPE      = "otel.scope";
-
-    // MDC keys written by the Micrometer OTel bridge when a span is active
-    public static final String MDC_TRACE_ID         = "traceId";
-    public static final String MDC_SPAN_ID          = "spanId";
+    // OpenTelemetry Java Agent Migration: MDC keys written by the Java Agent's
+    // logback-mdc instrumentation when a span is active (was traceId/spanId from
+    // the removed Micrometer Tracing bridge). The PROP_OTEL_SPAN/SCOPE exchange
+    // properties were removed — span lifecycle is now owned by the Java Agent.
+    public static final String MDC_TRACE_ID         = "trace_id";
+    public static final String MDC_SPAN_ID          = "span_id";
 
     private LogConstants() {}
 }

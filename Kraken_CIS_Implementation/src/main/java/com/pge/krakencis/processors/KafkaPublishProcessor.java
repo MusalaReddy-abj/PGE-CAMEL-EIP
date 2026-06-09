@@ -62,9 +62,10 @@ public class KafkaPublishProcessor {
                 exchange.getIn().setHeader("X-Correlation-ID", correlationId);
             }
 
-            // OpenTelemetry Integration — inject W3C traceparent into the Kafka record headers
-            // so the consumer span joins this trace. Additive header only; no business logic changes.
-            com.pge.krakencis.observability.ContextPropagationHelper.injectIntoHeaders(exchange);
+            // OpenTelemetry Java Agent Migration — Native SDK removed.
+            // The manual W3C traceparent injection (formerly ContextPropagationHelper) is
+            // removed; the Java Agent's Kafka-producer instrumentation injects the trace
+            // context into the record headers automatically. No business logic changes.
 
             if (topic != null) {
                 meterRegistry.counter(METRIC_KAFKA_PUBLISH_ATTEMPTED, "topic", topic).increment();

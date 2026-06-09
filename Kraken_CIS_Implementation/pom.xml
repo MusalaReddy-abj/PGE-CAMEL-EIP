@@ -158,60 +158,22 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
 
-        <!-- Distributed tracing: OpenTelemetry bridge for Micrometer Tracing.
-             Injects traceId/spanId into MDC automatically so every log line is
-             traceable across services. Also instruments RestClient outbound calls
-             to propagate W3C traceparent headers. -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-tracing-bridge-otel</artifactId>
-        </dependency>
-
-        <!-- Camel Observation — instruments every Camel route/processor via the SAME
-             Micrometer Observation API that Spring Boot / micrometer-tracing-bridge-otel
-             use. This unifies trace context, so Camel spans nest correctly under the
-             inbound HTTP span into ONE connected trace. (Do NOT also use
-             camel-opentelemetry-starter — running both creates duplicate, disconnected
-             spans.) -->
-        <dependency>
-            <groupId>org.apache.camel.springboot</groupId>
-            <artifactId>camel-observation-starter</artifactId>
-        </dependency>
-
-        <!-- OTLP exporter — ships spans to the OTel Collector (then Tempo/Jaeger).
-             Endpoint set via management.otlp.tracing.endpoint in application.yml.
-             Also used by the Native OpenTelemetry SDK (com.pge.krakencis.observability). -->
-        <dependency>
-            <groupId>io.opentelemetry</groupId>
-            <artifactId>opentelemetry-exporter-otlp</artifactId>
-        </dependency>
-
         <!-- ─────────────────────────────────────────────────────────────────────
-             Native OpenTelemetry SDK (com.pge.krakencis.observability)
-             ADDITIVE: builds an independent SdkTracerProvider that emits custom
-             stage spans (RECEIVED / VALIDATED / KAFKA_PUBLISH_* / EXTERNAL_SERVICE_CALL
-             / RESPONSE_SENT). Coexists with the Micrometer-bridge auto-instrumentation
-             above; both share the OpenTelemetry Context so spans nest into one trace.
-             api/sdk/context versions are managed by the Spring Boot BOM (version-less)
-             so they align with the OTel version the Micrometer bridge already pulls.
+             OpenTelemetry Java Agent Migration
+             Native SDK removed / Instrumentation provided by Java Agent.
+             All auto-instrumentation (Spring Boot, Camel, Kafka producer/consumer,
+             HTTP clients, REST/Undertow) and OTLP export are now supplied by the
+             OpenTelemetry Java Agent attached in the Dockerfile — NOT by the app.
+             Removed: micrometer-tracing-bridge-otel, camel-observation-starter,
+             opentelemetry-exporter-otlp, opentelemetry-sdk, opentelemetry-context,
+             opentelemetry-semconv.
+             Retained: opentelemetry-api ONLY — used by logging.SpanEnricher to
+             rename/attribute the Agent's active spans. Version managed by the Spring
+             Boot BOM (version-less) so it aligns with the Agent's OTel version.
              ───────────────────────────────────────────────────────────────────── -->
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-api</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.opentelemetry</groupId>
-            <artifactId>opentelemetry-sdk</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.opentelemetry</groupId>
-            <artifactId>opentelemetry-context</artifactId>
-        </dependency>
-        <!-- Semantic-convention attribute keys (not managed by the Spring Boot BOM → explicit version). -->
-        <dependency>
-            <groupId>io.opentelemetry.semconv</groupId>
-            <artifactId>opentelemetry-semconv</artifactId>
-            <version>1.25.0-alpha</version>
         </dependency>
 
         <!-- Logstash JSON encoder -->
