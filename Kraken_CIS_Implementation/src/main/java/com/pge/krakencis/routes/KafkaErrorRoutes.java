@@ -9,6 +9,7 @@ import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.component.kafka.KafkaConstants;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -115,5 +116,19 @@ public class KafkaErrorRoutes extends RouteBuilder {
         exchange.getIn().setHeader("X-Error-Attempt",     String.valueOf(attempt));
         exchange.getIn().setHeader("X-Error-Timestamp",
             OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+
+        // Preserve the DLQ replay counter across the retry/DLQ round trip. X-Replay-Count is
+        // set by DlqReplayRoute when it replays a message to the source topic, and it is the
+        // ONLY cap that stops replay (→ parking). Unlike X-Error-Attempt it is not otherwise
+        // re-stamped, so without this it is lost on the consume→retry→DLQ journey, the replayer
+        // always reads 0, and the message is replayed forever and never parks. Re-stamp it
+        // explicitly (byte[]-safe, since Kafka delivers headers as byte[]).
+        Object rawReplayCount = exchange.getIn().getHeader("X-Replay-Count");
+        if (rawReplayCount != null) {
+            String replayCount = (rawReplayCount instanceof byte[] bytes)
+                ? new String(bytes, StandardCharsets.UTF_8)
+                : rawReplayCount.toString();
+            exchange.getIn().setHeader("X-Replay-Count", replayCount);
+        }
     }
 }
