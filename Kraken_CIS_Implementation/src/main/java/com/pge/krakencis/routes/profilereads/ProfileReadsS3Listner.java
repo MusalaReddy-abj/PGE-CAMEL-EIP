@@ -132,6 +132,9 @@ public class ProfileReadsS3Listner extends BaseRoute {
                 // All other file types (.txt, .xml, etc.): log and move to error prefix
                 // so they are not picked up again on the next poll cycle.
                 .otherwise()
+                    // A real (but unsupported) file IS available here — trace its rejection/move
+                    // to the error prefix. Distinct span name so error files are easy to find.
+                    .process(ex -> com.pge.krakencis.logging.RouteRootSpan.start(ex, "reject profile-reads-s3-file"))
                     .process(exchange -> {
                         String key = exchange.getIn().getHeader(HDR_KEY, String.class);
                         String cid = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
