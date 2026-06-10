@@ -41,7 +41,7 @@ public class OdrHttpListner extends BaseRoute {
         JaxbDataFormat jaxbFormat = new JaxbDataFormat("com.pge.krakencis.models.odr.request");
 
         rest()
-            .post("/odr")
+            .post("/v1/odr")
                 .description("Receive an OnDemandRead request and forward to the mock SOAP service")
                 .consumes("text/xml")
                 .produces("text/xml")

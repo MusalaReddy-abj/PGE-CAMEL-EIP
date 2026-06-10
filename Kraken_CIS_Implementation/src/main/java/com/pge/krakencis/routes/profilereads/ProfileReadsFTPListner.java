@@ -85,6 +85,14 @@ public class ProfileReadsFTPListner extends BaseRoute {
             .routeId("route-profile-reads-ftp")
             .description("Poll ProfileReads CSV files from FTP, parse each row, publish to Kafka")
             .threads(ftpProperties.getThreadPoolSize())
+            // Start a root span for this poll — the Agent gives no entry span to S3/FTP/timer
+            // consumers, so without this the FTP/Kafka-publish spans are disconnected orphans.
+            .process(ex -> {
+                com.pge.krakencis.logging.RouteRootSpan.start(ex, "process profile-reads-ftp");
+                // Stamp the file name so the trace is searchable by file.
+                com.pge.krakencis.logging.RouteRootSpan.attr(ex, "file.name",
+                    ex.getIn().getHeader(org.apache.camel.Exchange.FILE_NAME, String.class));
+            })
             .process(correlationIdProcessor)
             .process(routeLoggingProcessor.entry(OPERATION))
             .process(profileReadsCsvProcessor)

@@ -93,6 +93,9 @@ public class DlqReplayRoute extends RouteBuilder {
             "initialDelayMs", initialDelayMs, "intervalMs", intervalMs, "maxPerRun", maxPerRun);
         from("timer:dlq-replay?period=" + intervalMs + "&delay=" + initialDelayMs)
             .routeId("route-dlq-replay")
+            // Start a root span for the replay run — the Agent gives no entry span to timer
+            // consumers, so without this the raw-Kafka consumer/producer spans are orphans.
+            .process(ex -> com.pge.krakencis.logging.RouteRootSpan.start(ex, "dlq-replay-run"))
             .process(this::replayAllDlqs);
     }
 
@@ -166,10 +169,17 @@ public class DlqReplayRoute extends RouteBuilder {
                             "replayCount", replayCount + 1);
                     }
                 }
-            }
 
-            producer.flush();
-            if (scanned > 0) consumer.commitSync();
+                // Flush and commit THIS batch before the next poll — NOT once at the end of
+                // the whole run. Committing per batch means each replayed message is marked
+                // consumed immediately, so a later poll failure, a rebalance (this consumer is
+                // re-created every run, which churns the group across both pods), or a pod
+                // crash cannot cause the batch to be re-read and re-replayed. This is the main
+                // source of duplicate replays. Producer flush must precede the commit so the
+                // replays are durably sent before we advance the consumer offset.
+                producer.flush();
+                consumer.commitSync();
+            }
 
             if (scanned > 0) {
                 log.info("dlqReplayRunCompleted", null,

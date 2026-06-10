@@ -41,7 +41,9 @@ public class RestApiConfig extends RouteBuilder {
             .corsHeaderProperty("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
             .corsHeaderProperty("Access-Control-Allow-Headers",
                                 "Content-Type,Authorization,X-Correlation-ID")
-            .contextPath("/api/v1")
+            // Context path is /api; the API version lives in each route's path (/v1/..., /v2/...)
+            // so multiple versions can coexist. External URLs are unchanged (still /api/v1/...).
+            .contextPath("/api")
             .apiContextPath("/api-doc")
             .apiProperty("api.title", "Kraken CIS Integration API")
             .apiProperty("api.version", "1.0.0");

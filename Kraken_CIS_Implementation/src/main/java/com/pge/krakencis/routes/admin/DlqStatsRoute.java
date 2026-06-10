@@ -127,7 +127,7 @@ public class DlqStatsRoute extends RouteBuilder {
 
     @Override
     public void configure() {
-        rest("/admin/dlq")
+        rest("/v1/admin/dlq")
             .tag("Admin")
             .description("DLQ visibility")
             .get("/stats")
