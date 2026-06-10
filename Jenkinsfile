@@ -30,7 +30,7 @@ pipeline {
 
         stage('Build') {
             when {
-                branch 'main'
+                branch 'feature/s3-file'
             }
             steps {
                 dir('Kraken_CIS_Implementation') {
@@ -41,7 +41,7 @@ pipeline {
 
         stage('Docker Build') {
              when {
-                branch 'main'
+                branch 'feature/s3-file'
             }
             steps {
                 sh "docker build -t ${env.FULL_IMAGE} ."
@@ -51,7 +51,7 @@ pipeline {
 
         stage('ECR Push') {
             when {
-                branch 'main'
+                branch 'feature/s3-file'
             }
             steps {
                 sh "docker push ${env.FULL_IMAGE}"
@@ -61,7 +61,7 @@ pipeline {
 
          stage('Docker Cleanup') {
              when {
-                branch 'main'
+                branch 'feature/s3-file'
             }
             steps {
                 sh "docker rmi ${env.FULL_IMAGE}"
@@ -71,7 +71,7 @@ pipeline {
 
         stage('Deploy') {
             when {
-                branch 'main'
+                branch 'feature/s3-file'
             }
             steps {
                 sh """

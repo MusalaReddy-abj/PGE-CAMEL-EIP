@@ -67,6 +67,18 @@ odr:
     minimum: "1.0"         # reject X-API-Version below this
     default: "1.1"         # used when the client sends no X-API-Version header
 
+# Profile Reads S3 ingestion mode (cross-pod duplicate handling):
+#  · work-queue (default) — ProfileReadsScheduler lists S3 and publishes one work-item per
+#    file to a Kafka work topic; the consumer group hands each file to exactly ONE pod, so no
+#    cross-pod duplicate processing while both pods stay busy. See ProfileReadsWorkConsumer.
+#  · poller — original direct aws2-s3 polling (ProfileReadsS3Listner); both pods poll the same
+#    bucket and can double-process. Use only for single-pod runs or fallback.
+profile-reads:
+  ingestion:
+    mode: work-queue
+  work:
+    max-poll-records: 5    # files processed per poll before commit (keep modest — files are heavy)
+
 ftp:
   listener:
     enabled: false   # set true to re-enable the Profile Reads FTP poller

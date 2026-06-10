@@ -13,7 +13,7 @@ import com.pge.krakencis.routes.BaseRoute;
 import jakarta.annotation.PostConstruct;
 import org.apache.camel.Exchange;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -51,7 +51,11 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
  * {@code route-profile-reads-s3}
  */
  @Component
-@ConditionalOnProperty(prefix = "aws.s3.profile-reads", name = "bucket-name")
+// Direct aws2-s3 poller — the original ingestion path. Active only in `poller` mode; the
+// default `work-queue` mode uses ProfileReadsScheduler + ProfileReadsWorkConsumer instead
+// (which avoids cross-pod duplicate processing). Both pods polling here can double-process.
+@ConditionalOnExpression(
+    "'${aws.s3.profile-reads.bucket-name:}' != '' and '${profile-reads.ingestion.mode:work-queue}' == 'poller'")
 public class ProfileReadsS3Listner extends BaseRoute {
 
     private static final String           OPERATION = "profileReadsS3Poll";
