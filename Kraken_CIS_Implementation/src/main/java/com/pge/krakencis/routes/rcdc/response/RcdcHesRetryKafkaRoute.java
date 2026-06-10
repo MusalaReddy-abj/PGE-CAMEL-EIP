@@ -75,7 +75,9 @@ public class RcdcHesRetryKafkaRoute extends BaseKafkaConsumerRoute {
         configureRetryQueueErrorHandlers(route, hesRetryTopic, hesDlqTopic, SERVICE_NAME);
 
         route
-            .process(com.pge.krakencis.logging.SpanEnricher.kafkaConsume())
+            // Re-join the producer's trace (the Agent injects traceparent on publish but
+            // does not extract it for Camel consumers). Supersedes SpanEnricher.kafkaConsume().
+            .process(com.pge.krakencis.logging.KafkaTraceContext::adopt)
             .process(exchange -> exchange.setProperty(
                 LogConstants.PROP_ORIGINAL_BODY, exchange.getIn().getBody(String.class)))
             .process(this::extractCorrelationIdFromRetry)
@@ -114,7 +116,9 @@ public class RcdcHesRetryKafkaRoute extends BaseKafkaConsumerRoute {
     }
 
     private int parseAttempt(Exchange exchange) {
-        String raw = exchange.getIn().getHeader("X-Error-Attempt", "0", String.class);
-        try { return Integer.parseInt(raw); } catch (NumberFormatException e) { return 0; }
+        // Must use the byte[]-aware reader: Kafka delivers X-Error-Attempt as a byte[],
+        // and a plain String read falls back to 0 — which makes the exhaustion guard never
+        // trip and the message retry forever. See BaseKafkaConsumerRoute#parseKafkaHeaderAsInt.
+        return parseKafkaHeaderAsInt(exchange, "X-Error-Attempt", 0);
     }
 }

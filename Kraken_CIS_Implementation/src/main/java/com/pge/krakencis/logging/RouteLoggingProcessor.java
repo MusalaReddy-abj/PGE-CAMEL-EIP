@@ -1,5 +1,6 @@
 package com.pge.krakencis.logging;
 
+import io.opentelemetry.api.trace.Span;
 import org.apache.camel.Exchange;
 import org.apache.camel.Processor;
 import org.springframework.stereotype.Component;
@@ -68,6 +69,17 @@ public class RouteLoggingProcessor {
             auditLogger.logRouteStart(exchange, operation);
 
             String correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
+
+            // Stamp the correlation ID onto the active span so traces are searchable by it
+            // in the backend (Jaeger tag `correlation_id`, Tempo `{ .correlation_id = "..." }`).
+            // Runs in every route after the ID is established, so it covers HTTP and Kafka alike.
+            if (correlationId != null) {
+                Span span = Span.current();
+                if (span.getSpanContext().isValid()) {
+                    span.setAttribute("correlation_id", correlationId);
+                }
+            }
+
             log.debug("routeEntry", correlationId,
                 "operation",    operation,
                 "sourceSystem", sourceSystem,

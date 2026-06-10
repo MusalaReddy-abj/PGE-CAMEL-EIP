@@ -17,7 +17,7 @@
 #   POST /rcdcresponse    → rcdc-response-service     → app   /api/v1/rcdc/response
 #   POST|GET /rcdcswitchstatus → rcdc-soap-service    → SOAP  /soap/rcdc  (+?wsdl)
 #   POST /alarms         → alarms-service           → app   /api/v1/alarms
-#   POST /ondemandread   → ODR-service              → app   /api/v1/odr
+#   POST /ondemandread   → ODR-service              → app   /api/v1/odr   (switch service `path` to promote v2)
 #
 # CROSS-CUTTING (global plugins, applied to every service/route below):
 #   opentelemetry · jwt · correlation-id · prometheus · rate-limiting · file-log
@@ -206,24 +206,28 @@ services:
               - "Accept: application/json"
 
   # ───────────────────────────────────────────────────────────────────────────
-  # On-Demand Read (inbound)  —  client POST /ondemandread  →  app /api/v1/odr
-  # ODR SOAP request forwarded to the app's ODR endpoint. XML.
-  # NOTE: route renamed `odr-route` — the source used `rcdc-route` which collides
-  # with the RCDC service's route (Kong route names must be globally unique and
-  # `deck sync` / validation would reject the duplicate).
+  # On-Demand Read (inbound)  —  client POST /ondemandread  →  app /api/v{N}/odr
+  #
+  # ONE route, STABLE external URL (/ondemandread never changes for clients).
+  # The ACTIVE backend version is the service `path` below — switch it to
+  # promote or roll back a version WITHOUT any client/URL change:
+  #     path: /api/v1/odr   ← v1 live (current)
+  #     path: /api/v2/odr   ← change to this to put v2 live; revert to roll back
+  # The app keeps BOTH /api/v1/odr and /api/v2/odr available, so the switch is
+  # instant — just edit this one line and re-sync Kong.
   # ───────────────────────────────────────────────────────────────────────────
   - name: ODR-service
     protocol: http
     host: pge-camel-eip.default.svc.cluster.local
     port: 80
-    path: /api/v1/odr
+    path: /api/v1/odr             # ← ACTIVE VERSION. Switch to /api/v2/odr to promote v2; revert to roll back.
     routes:
       - name: odr-route
         paths:
           - /ondemandread
         methods:
           - POST
-        strip_path: true
+        strip_path: true          # /ondemandread dropped; service `path` (the active version) used upstream
         preserve_host: false
         protocols:
           - http
@@ -233,7 +237,7 @@ services:
         config:
           remove:
             headers:
-              - Authorization
+              - Authorization      # app does not consume the inbound JWT
           add:
             headers:
               - "Content-Type: application/xml"

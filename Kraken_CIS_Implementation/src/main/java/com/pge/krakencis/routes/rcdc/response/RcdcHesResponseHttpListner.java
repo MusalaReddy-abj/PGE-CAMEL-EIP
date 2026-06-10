@@ -58,7 +58,7 @@ public class RcdcHesResponseHttpListner extends BaseRoute {
 
     @Override
     public void configure() {
-        rest("/rcdc/response")
+        rest("/v1/rcdc/response")
             .post()
                 .description("Receive RCDC response from HES and publish to Kafka")
                 .consumes("application/json")

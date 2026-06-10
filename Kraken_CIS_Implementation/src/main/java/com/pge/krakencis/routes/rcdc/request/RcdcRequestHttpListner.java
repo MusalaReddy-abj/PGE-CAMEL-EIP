@@ -50,7 +50,7 @@ public class RcdcRequestHttpListner extends BaseRoute {
         JaxbDataFormat jaxbFormat = new JaxbDataFormat("com.pge.krakencis.models.rcdc.request");
 
         rest()
-            .post("/rcdc")
+            .post("/v1/rcdc")
                 .description("Receive a Remote Connect / Disconnect Command and publish to Kafka")
                 .consumes("text/xml")
                 .produces("text/xml")
