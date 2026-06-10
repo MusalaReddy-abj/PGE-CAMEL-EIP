@@ -1,12 +1,10 @@
 package com.pge.krakencis.processors;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pge.krakencis.exceptions.KrakenBaseException;
 import com.pge.krakencis.exceptions.TransformationException;
 import com.pge.krakencis.exceptions.ValidationException;
 import com.pge.krakencis.logging.AuditLogger;
 import com.pge.krakencis.logging.LogConstants;
-import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.models.ErrorResponse;
 import org.apache.camel.Exchange;
 import org.apache.camel.Processor;
@@ -44,14 +42,10 @@ import java.util.Map;
 @Component
 public class RouteExceptionProcessor {
 
-    private static final StructuredLogger log = StructuredLogger.of(RouteExceptionProcessor.class);
+    private final AuditLogger auditLogger;
 
-    private final AuditLogger  auditLogger;
-    private final ObjectMapper objectMapper;
-
-    public RouteExceptionProcessor(AuditLogger auditLogger, ObjectMapper objectMapper) {
-        this.auditLogger  = auditLogger;
-        this.objectMapper = objectMapper;
+    public RouteExceptionProcessor(AuditLogger auditLogger) {
+        this.auditLogger = auditLogger;
     }
 
     // ── Exception-type handlers ───────────────────────────────────────────────
@@ -132,22 +126,12 @@ public class RouteExceptionProcessor {
             .detail(detail)
             .build();
 
-        // Marshal to a JSON String here. The XML routes (/rcdc, /odr) use
-        // bindingMode=off, so there is no REST data-format to convert an ErrorResponse
-        // object into bytes — Undertow would fail with NoTypeConversionAvailableException
-        // (ErrorResponse → ByteBuffer). Serialising to a String makes the error body
-        // sendable on every route regardless of binding mode.
-        String body;
-        try {
-            body = objectMapper.writeValueAsString(errorResponse);
-        } catch (Exception e) {
-            log.warn("errorResponseSerializeFailed", correlationId, "error", e.getMessage());
-            body = "{\"status\":" + httpStatus + ",\"errorCode\":\"" + code
-                + "\",\"message\":\"" + (message != null ? message.replace("\"", "'") : "")
-                + "\",\"correlationId\":\"" + correlationId + "\"}";
-        }
-
-        exchange.getIn().setBody(body);
+        // Set the ErrorResponse OBJECT (not a pre-serialized String). On JSON-binding routes
+        // (/alarms, /rcdc/response) the REST binding marshals it to a JSON object; on
+        // bindingMode=off routes (/rcdc, /odr) ErrorResponseTypeConverter converts it to a JSON
+        // string for sending. Either way the client gets a proper JSON object. Setting a String
+        // here made the JSON-binding routes DOUBLE-ENCODE it into a quoted, escaped string.
+        exchange.getIn().setBody(errorResponse);
         exchange.getIn().setHeader(Exchange.HTTP_RESPONSE_CODE, httpStatus);
         exchange.getIn().setHeader(Exchange.CONTENT_TYPE, "application/json");
     }
