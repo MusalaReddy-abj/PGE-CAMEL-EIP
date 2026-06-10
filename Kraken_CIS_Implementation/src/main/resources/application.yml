@@ -54,11 +54,18 @@ http:
       max-delay-ms: 30000
       retryable-status-codes: [404, 408, 429, 500, 502, 503, 504]
 
-# ODR API versioning — v2 (/api/v2/odr, JSON response) coexists with v1 (/api/v1/odr, SOAP/XML).
-# Rollback to v1-only: set odr.v2.enabled=false and restart. v1 is unaffected either way.
+# ODR API versioning.
+#  · MAJOR version is in the URL: /api/v1/odr, /api/v2/odr. v2 toggle below.
+#  · MINOR version is negotiated per-request via the X-API-Version header on v1
+#    (NOT the URL — minors are backward-compatible). Enforced by OdrVersionProcessor:
+#    absent → default; unknown → 400; below minimum → 400. 1.1 adds an additive field.
 odr:
   v2:
     enabled: true
+  version:
+    supported: "1.0,1.1"   # supported MINOR versions of the v1 major
+    minimum: "1.0"         # reject X-API-Version below this
+    default: "1.1"         # used when the client sends no X-API-Version header
 
 ftp:
   listener:

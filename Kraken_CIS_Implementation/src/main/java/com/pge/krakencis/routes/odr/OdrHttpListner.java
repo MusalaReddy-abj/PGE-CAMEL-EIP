@@ -7,6 +7,8 @@ import com.pge.krakencis.processors.SoapEnvelopeExtractorProcessor;
 import com.pge.krakencis.processors.SoapEnvelopeWrapperProcessor;
 import com.pge.krakencis.processors.odr.OdrMockCallProcessor;
 import com.pge.krakencis.processors.odr.OdrRequestProcessor;
+import com.pge.krakencis.processors.odr.OdrV1ResponseEnricher;
+import com.pge.krakencis.processors.odr.OdrVersionProcessor;
 import com.pge.krakencis.routes.BaseRoute;
 import org.apache.camel.converter.jaxb.JaxbDataFormat;
 import org.apache.camel.model.rest.RestBindingMode;
@@ -21,6 +23,8 @@ public class OdrHttpListner extends BaseRoute {
     private final SoapEnvelopeWrapperProcessor   soapEnvelopeWrapperProcessor;
     private final OdrRequestProcessor            odrRequestProcessor;
     private final OdrMockCallProcessor           odrMockCallProcessor;
+    private final OdrVersionProcessor            odrVersionProcessor;
+    private final OdrV1ResponseEnricher          odrV1ResponseEnricher;
 
     public OdrHttpListner(CorrelationIdProcessor         correlationIdProcessor,
                           RouteLoggingProcessor          routeLoggingProcessor,
@@ -28,12 +32,16 @@ public class OdrHttpListner extends BaseRoute {
                           SoapEnvelopeExtractorProcessor soapEnvelopeExtractorProcessor,
                           SoapEnvelopeWrapperProcessor   soapEnvelopeWrapperProcessor,
                           OdrRequestProcessor            odrRequestProcessor,
-                          OdrMockCallProcessor           odrMockCallProcessor) {
+                          OdrMockCallProcessor           odrMockCallProcessor,
+                          OdrVersionProcessor            odrVersionProcessor,
+                          OdrV1ResponseEnricher          odrV1ResponseEnricher) {
         super(correlationIdProcessor, routeLoggingProcessor, exceptionProcessor);
         this.soapEnvelopeExtractorProcessor = soapEnvelopeExtractorProcessor;
         this.soapEnvelopeWrapperProcessor   = soapEnvelopeWrapperProcessor;
         this.odrRequestProcessor            = odrRequestProcessor;
         this.odrMockCallProcessor           = odrMockCallProcessor;
+        this.odrVersionProcessor            = odrVersionProcessor;
+        this.odrV1ResponseEnricher          = odrV1ResponseEnricher;
     }
 
     @Override
@@ -51,11 +59,13 @@ public class OdrHttpListner extends BaseRoute {
         processingRoute("direct:process-odr", "route-post-odr", OPERATION, route ->
             route
                 .process(com.pge.krakencis.logging.SpanEnricher.httpRoute("POST", "/api/v1/odr"))
+                .process(odrVersionProcessor)                    // resolve + enforce minor version (X-API-Version)
                 .setProperty("odr.rawXml", simple("${body}"))  // preserve full SOAP envelope for mock forwarding
                 .process(soapEnvelopeExtractorProcessor)         // strip envelope → body becomes requestMessage
                 .unmarshal(jaxbFormat)
                 .process(odrRequestProcessor)
                 .process(odrMockCallProcessor)                   // sets body to mock response XML
+                .process(odrV1ResponseEnricher)                  // minor-version additive fields (e.g. 1.1 → processedAt)
                 .process(soapEnvelopeWrapperProcessor)           // wrap response in SOAP envelope
         );
     }
