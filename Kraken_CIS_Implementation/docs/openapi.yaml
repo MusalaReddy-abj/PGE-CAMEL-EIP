@@ -13,8 +13,8 @@ info:
     | Alarm Events | `POST /alarms` | → Kafka `kraken-alarm-events` |
     | RCDC Command | `POST /rcdc` | → Kafka `kraken-rcdc-events` → SOA-RCDC HTTP |
     | RCDC HES Response | `POST /rcdc/response` | → Kafka `kraken-rcdc-hes-response-events` → MDM SOAP |
-    | On-Demand Read | `POST /odr` | *synchronous* → SOA-ODR SOAP (no Kafka) |
-    | Profile Reads | FTP / S3 poll (CSV) | → Kafka `kraken-profile-reads-events` (+ DLQ + audit) |
+    | On-Demand Read | `POST /api/v1/odr` · `POST /api/v2/odr` | *synchronous* → SOA-ODR SOAP (no Kafka). v2 adds an `<apiVersion>` element; v1 minor versions via `X-API-Version` header |
+    | Profile Reads | FTP poll · S3 work-queue (CSV) | → Kafka `kraken-profile-reads-events` (+ DLQ + audit) |
     | DLQ visibility | `GET /admin/dlq/stats` | reads consumer-group lag per DLQ / parking topic |
 
     ## Error Response Structure
@@ -86,15 +86,42 @@ info:
     logs, and downstream HTTP/SOAP calls. Supply `X-Correlation-ID` on the HES response
     endpoint to carry the ID from the original RCDC command.
 
+    ## API Versioning (ODR)
+
+    **Major version → in the URL path** (for breaking changes). Both versions run side by side:
+    - `POST /api/v1/odr` — v1 (base SOAP/XML response)
+    - `POST /api/v2/odr` — v2: same request + response **plus an additive `<apiVersion>` element**
+
+    At the gateway, `POST /ondemandread` proxies to the active backend version — switch the
+    Kong service `path` (`/api/v1/odr` ↔ `/api/v2/odr`) to promote/roll back without changing
+    the client URL.
+
+    **Minor version → negotiated per request via the `X-API-Version` header** (NOT the URL —
+    minors are backward-compatible). On `/api/v1/odr`:
+    - header absent → latest supported minor (default `1.1`)
+    - `1.0` → base response
+    - `1.1` → base response **+ additive `<processedAt>` element**
+    - unsupported value or below the configured minimum → **400**
+
+    The resolved version is echoed back in the `X-API-Version` response header.
+
   version: 1.0.0
   contact:
     name: PGE Integration Team
+  license:
+    name: Proprietary — PG&E Internal Use Only
 
 servers:
   - url: http://localhost:8122/api/v1
-    description: Local / Dev (direct to app — Camel REST port)
+    description: Local / Dev — direct to app (Camel REST port, unauthenticated)
   - url: http://localhost:8000
-    description: Via Kong API Gateway (requires JWT Bearer token)
+    description: Via Kong API Gateway (JWT Bearer required)
+
+# JWT Bearer is enforced at the Kong gateway for every route. Direct-to-app dev calls
+# (port 8122) bypass the gateway and are unauthenticated. Override per-operation with
+# `security: []` only where auth is intentionally not required.
+security:
+  - jwtBearer: []
 
 tags:
   - name: Alarms
@@ -182,6 +209,9 @@ paths:
       responses:
         '202':
           description: Alarm events accepted and published to Kafka
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
           content:
             application/json:
               schema:
@@ -195,6 +225,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -276,6 +308,9 @@ paths:
       responses:
         '200':
           description: RCDC command accepted and queued to Kafka
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
           content:
             application/xml:
               schema:
@@ -296,6 +331,8 @@ paths:
           $ref: '#/components/responses/BadRequestXml'
         '422':
           $ref: '#/components/responses/UnprocessableEntityXml'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailableXml'
         '500':
@@ -374,6 +411,9 @@ paths:
       responses:
         '202':
           description: HES response accepted and queued for MDM notification
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
           content:
             application/json:
               schema:
@@ -387,6 +427,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -403,7 +445,96 @@ paths:
         other flows there is no Kafka hop. The original SOAP envelope is preserved and
         forwarded as-is after envelope extraction/validation.
 
+        **Versioning:** this is the **v1 major** (`/api/v1/odr`). The **v2 major**
+        (`/api/v2/odr`, route `route-post-odr-v2`) returns the same response plus an additive
+        `<apiVersion>` element. **Minor** versions are selected per request via the
+        `X-API-Version` header below.
+
         **Camel Route:** `route-post-odr`
+      tags:
+        - ODR
+      parameters:
+        - name: X-API-Version
+          in: header
+          required: false
+          description: |
+            ODR **minor** version (within the v1 major). Backward-compatible; absent → latest
+            (`1.1`). `1.0` = base response; `1.1` = base + additive `<processedAt>`. Unsupported
+            or below the minimum → 400. The resolved value is echoed in the `X-API-Version`
+            response header.
+          schema:
+            type: string
+            enum: ["1.0", "1.1"]
+            default: "1.1"
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema:
+              type: string
+              format: xml
+            example: |
+              <?xml version="1.0" encoding="UTF-8"?>
+              <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+                <soapenv:Header/>
+                <soapenv:Body>
+                  <requestMessage xmlns="http://xmlns.oracle.com/ouaf/iec">
+                    <header>
+                      <verb>Get</verb>
+                      <noun>OnDemandRead</noun>
+                      <correlationID>3fa85f64-5717-4562-b3fc-2c963f66afa6</correlationID>
+                    </header>
+                    <payLoad>
+                      <endDeviceAsset>
+                        <mRID>1.21.120.0.0.0.0.0.0.0.0.0.0.0.0.0.0.4097</mRID>
+                      </endDeviceAsset>
+                    </payLoad>
+                  </requestMessage>
+                </soapenv:Body>
+              </soapenv:Envelope>
+      responses:
+        '200':
+          description: |
+            SOAP response from the SOA-ODR service (forwarded synchronously). With
+            `X-API-Version: 1.1` (or absent → default), the SOAP body additionally carries a
+            `<processedAt>` element.
+          headers:
+            X-API-Version:
+              $ref: '#/components/headers/ApiVersion'
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/xml:
+              schema:
+                type: string
+                format: xml
+        '400':
+          $ref: '#/components/responses/BadRequestXml'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityXml'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableXml'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ── On-Demand Read v2 (additive response field) ─────────────────────────────
+  /v2/odr:
+    servers:
+      - url: http://localhost:8122/api
+        description: Local / Dev — direct to app (Camel REST port, unauthenticated)
+      - url: http://localhost:8000
+        description: Via Kong API Gateway (proxied from POST /ondemandread when v2 is promoted)
+    post:
+      operationId: receiveOnDemandReadV2
+      summary: Submit an On-Demand Read — v2 (additive response field)
+      description: |
+        ODR **v2 major** (`/api/v2/odr`). Identical XML request and synchronous SOAP/XML
+        response to v1, **plus an additive `<apiVersion>2.0</apiVersion>` element** in the SOAP
+        body — backward compatible. Enabled via `odr.v2.enabled`.
+
+        **Camel Route:** `route-post-odr-v2`
       tags:
         - ODR
       requestBody:
@@ -434,7 +565,14 @@ paths:
               </soapenv:Envelope>
       responses:
         '200':
-          description: SOAP response from the SOA-ODR service (forwarded synchronously)
+          description: |
+            SOAP response from the SOA-ODR service, with the additive
+            `<apiVersion>2.0</apiVersion>` element in the SOAP body.
+          headers:
+            X-API-Version:
+              $ref: '#/components/headers/ApiVersion'
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
           content:
             application/xml:
               schema:
@@ -444,6 +582,8 @@ paths:
           $ref: '#/components/responses/BadRequestXml'
         '422':
           $ref: '#/components/responses/UnprocessableEntityXml'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailableXml'
         '500':
@@ -983,10 +1123,61 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponseXml'
 
-  # ── Security (add auth scheme when implemented) ──────────────────────────────
+    TooManyRequests:
+      description: |
+        Rate limit exceeded at the Kong gateway. Each API has its own per-minute quota
+        (configured per route). Retry after the window resets.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+        RateLimit-Limit:
+          description: Requests permitted in the current window
+          schema:
+            type: integer
+        RateLimit-Remaining:
+          description: Requests remaining in the current window
+          schema:
+            type: integer
+        RateLimit-Reset:
+          description: Seconds until the window resets
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 429
+            errorCode: SYS-429
+            message: "API rate limit exceeded"
+            correlationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+            timestamp: "2025-12-18T10:00:00+05:30"
+
+  # ── Reusable Response Headers ────────────────────────────────────────────────
+  headers:
+    CorrelationId:
+      description: |
+        End-to-end correlation ID, echoed on every response (the Kong correlation-id
+        plugin generates one when the request omits `X-Correlation-ID`).
+      schema:
+        type: string
+        format: uuid
+      example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+    ApiVersion:
+      description: The resolved ODR minor version that served the request.
+      schema:
+        type: string
+        example: "1.1"
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema:
+        type: integer
+      example: 30
+
+  # ── Security ─────────────────────────────────────────────────────────────────
   securitySchemes:
-    # Applied at the Kong gateway (HS256 JWT). Direct-to-app calls (port 8122) are
-    # unauthenticated in dev. Send as: Authorization: Bearer <token>
+    # HS256 JWT verified at the Kong gateway. Send as: Authorization: Bearer <token>.
+    # Direct-to-app dev calls (port 8122) bypass the gateway and are unauthenticated.
     jwtBearer:
       type: http
       scheme: bearer
