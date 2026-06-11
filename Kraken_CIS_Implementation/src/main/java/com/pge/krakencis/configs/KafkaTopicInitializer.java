@@ -64,13 +64,14 @@ public class KafkaTopicInitializer {
     @Value("${kafka.topic.profile-reads-dlq:kraken-profile-reads-dlq-events}")    private String profileReadsDlq;
     @Value("${kafka.topic.profile-reads-parking:kraken-profile-reads-parking-events}") private String profileReadsParking;
     @Value("${kafka.topic.profile-reads-audit:kraken-profile-reads-audit-events}") private String profileReadsAudit;
+    @Value("${kafka.topic.profile-reads-work:kraken-profile-reads-work-events}")  private String profileReadsWork;
 
     @PostConstruct
     public void ensureTopics() {
         List<String> topics = List.of(
             alarms, rcdc, rcdcRetry, rcdcDlq, rcdcParking,
             hesResponse, hesRetry, hesDlq, hesParking,
-            profileReads, profileReadsDlq, profileReadsParking, profileReadsAudit);
+            profileReads, profileReadsDlq, profileReadsParking, profileReadsAudit, profileReadsWork);
 
         try (AdminClient admin = AdminClient.create(adminProps())) {
             Set<String> existing = admin.listTopics().names().get(TIMEOUT_S, TimeUnit.SECONDS);

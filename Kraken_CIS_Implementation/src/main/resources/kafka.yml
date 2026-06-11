@@ -48,6 +48,9 @@ kafka:
     profile-reads-dlq:     kraken-profile-reads-dlq-events
     profile-reads-parking: kraken-profile-reads-parking-events
     profile-reads-audit:   kraken-profile-reads-audit-events
+    # Work-queue topic: one message per discovered S3 file ({bucket,key,fileName}),
+    # keyed by fileName so duplicate work-items for a file land on one consumer.
+    profile-reads-work:    kraken-profile-reads-work-events
 
 # Retry-queue consumer — delay between retry-queue attempts (back-off)
 retry:
