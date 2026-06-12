@@ -6,6 +6,7 @@ import com.pge.krakencis.exceptions.TransformationException;
 import com.pge.krakencis.exceptions.ValidationException;
 import com.pge.krakencis.logging.LogConstants;
 import com.pge.krakencis.logging.RouteLoggingProcessor;
+import com.pge.krakencis.logging.RouteRootSpan;
 import com.pge.krakencis.logging.StructuredLogger;
 import com.pge.krakencis.models.profilereads.ProfileReadsWorkItem;
 import com.pge.krakencis.processors.CorrelationIdProcessor;
@@ -137,6 +138,14 @@ public class ProfileReadsWorkConsumer extends BaseKafkaConsumerRoute {
         exchange.setProperty(PROP_S3_KEY, item.key());
         exchange.getIn().setHeader("X-Correlation-ID", correlationId);
         exchange.getIn().setHeader(Exchange.FILE_NAME, item.fileName());
+
+        // Stamp file identity on the (adopted) Kafka CONSUMER span so traces are searchable by
+        // file in the backend (Jaeger tag `file.name`, Tempo `{ .file.name = "..." }`) — consistent
+        // with the S3 poller route (ProfileReadsS3Listner). KafkaTraceContext.adopt() already made
+        // the span current, so these land on it. `correlation_id` is stamped separately by
+        // routeLoggingProcessor.entry() and equals fileName here.
+        RouteRootSpan.attr(exchange, "file.name",  item.fileName());
+        RouteRootSpan.attr(exchange, "aws.s3.key", item.key());
 
         log.info("profileReadsWorkReceived", correlationId, "bucket", item.bucket(), "key", item.key());
     }
