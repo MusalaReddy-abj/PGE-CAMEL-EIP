@@ -28,15 +28,15 @@ rest:
 external-services:
   services:
     rcdc:
-      url: http://k8s-kong-kongprox-9acef1f816-46ee569626f12d48.elb.ap-south-2.amazonaws.com/rcdcrequest
+      url: http://k8s-kong-kongprox-ab80982ddc-c2f4184cafe543b5.elb.ap-south-2.amazonaws.com/rcdcrequest
       timeout: 30000
       content-type: application/json
     rcdc-mdm-notification:
-      url: http://k8s-kong-kongprox-9acef1f816-46ee569626f12d48.elb.ap-south-2.amazonaws.com/rcdcswitchstatus
+      url: http://k8s-kong-kongprox-ab80982ddc-c2f4184cafe543b5.elb.ap-south-2.amazonaws.com/rcdcswitchstatus
       timeout: 30000
       content-type: "text/xml; charset=utf-8"
     odr-mock:
-      url: http://k8s-kong-kongprox-9acef1f816-46ee569626f12d48.elb.ap-south-2.amazonaws.com/mockondemandread
+      url: http://k8s-kong-kongprox-ab80982ddc-c2f4184cafe543b5.elb.ap-south-2.amazonaws.com/mockondemandread
       timeout: 30000
       content-type: "text/xml; charset=utf-8"
 

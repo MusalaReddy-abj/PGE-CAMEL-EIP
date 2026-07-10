@@ -1,6 +1,6 @@
 kafka:
   producer:
-    brokers: b-1-public.pgeintegrationdemo.37vkb5.c2.kafka.ap-south-2.amazonaws.com:9198,b-2-public.pgeintegrationdemo.37vkb5.c2.kafka.ap-south-2.amazonaws.com:9198,b-3-public.pgeintegrationdemo.37vkb5.c2.kafka.ap-south-2.amazonaws.com:9198
+    brokers: b-3.integrationdemo.0smws8.c2.kafka.ap-south-2.amazonaws.com:9092,b-1.integrationdemo.0smws8.c2.kafka.ap-south-2.amazonaws.com:9092,b-2.integrationdemo.0smws8.c2.kafka.ap-south-2.amazonaws.com:9092
     acks: all
     retries: 3
     request-timeout-ms: 30000
