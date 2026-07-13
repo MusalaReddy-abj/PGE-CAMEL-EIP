@@ -104,9 +104,16 @@ public class RouteExceptionProcessor {
             detail.put("retriesAttempted", retries);
             detail.put("cause", ex != null ? ex.getMessage() : "Unknown error");
 
-            respond(exchange, 503, "SYS-001",
-                "Service temporarily unavailable after " + retries + " retry attempt(s)",
-                detail);
+            String code = "SYS-001";
+            String message = "Service temporarily unavailable after " + retries + " retry attempt(s)";
+
+            if (ex instanceof KrakenBaseException krakenEx) {
+                code = krakenEx.getErrorCode().getCode();
+                message = krakenEx.getMessage();
+                detail.putAll(krakenEx.getContext());
+            }
+
+            respond(exchange, 503, code, message, detail);
         };
     }
 

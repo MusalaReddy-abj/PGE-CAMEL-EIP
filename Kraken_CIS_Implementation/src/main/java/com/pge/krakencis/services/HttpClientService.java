@@ -156,13 +156,23 @@ public class HttpClientService {
             "url",         request.getUrl(),
             "maxAttempts", maxAttempts,
             "lastStatus",  lastError != null ? lastError.getHttpStatusCode() : null);
-        throw new RetryableException(
-            ErrorCode.TRANSIENT_ERROR,
-            "All " + maxAttempts + " HTTP attempts failed for " + request.getServiceName()
-                + " at " + request.getUrl()
-                + (lastError != null ? " — last HTTP status: " + lastError.getHttpStatusCode() : ""),
+        Integer lastStatus = lastError != null ? lastError.getHttpStatusCode() : null;
+        ErrorCode exhaustedErrorCode = lastStatus == null || lastStatus == 503
+            ? ErrorCode.EXTERNAL_SERVICE_UNAVAILABLE
+            : ErrorCode.EXTERNAL_SERVICE_ERROR;
+
+        RetryableException exhausted = new RetryableException(
+            exhaustedErrorCode,
+            request.getServiceName() + " is unavailable after " + maxAttempts + " HTTP attempt(s)"
+                + (lastStatus != null ? " - last HTTP status: " + lastStatus : ""),
             correlationId,
             maxAttempts);
+        exhausted.withContext("serviceName", request.getServiceName());
+        exhausted.withContext("url", request.getUrl());
+        if (lastStatus != null) {
+            exhausted.withContext("httpStatus", lastStatus);
+        }
+        throw exhausted;
     }
 
     // ── private ───────────────────────────────────────────────────────────────
@@ -282,7 +292,7 @@ public class HttpClientService {
                 "durationMs", duration,
                 "attempt",    attempt,
                 "error",      e.getMessage());
-            throw ExternalServiceException.unavailable(request.getUrl(), correlationId, e);
+            throw ExternalServiceException.unavailable(request.getServiceName(), correlationId, e);
         }
         finally {
             span.end();
