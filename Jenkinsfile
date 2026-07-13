@@ -39,6 +39,18 @@ pipeline {
             }
         }
 
+        stage('ECR Login') {
+             when {
+                branch 'main'
+             }
+             steps {
+                 sh """
+                 aws ecr get-login-password --region ${AWS_REGION} | \
+                 docker login --username AWS --password-stdin ${ECR_URL}
+                 """
+             }
+       }
+
         stage('Docker Build') {
              when {
                 branch 'main'
