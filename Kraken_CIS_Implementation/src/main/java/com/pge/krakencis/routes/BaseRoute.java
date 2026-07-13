@@ -10,6 +10,7 @@ import com.pge.krakencis.processors.RouteExceptionProcessor;
 import org.apache.camel.LoggingLevel;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.model.RouteDefinition;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.util.function.Consumer;
 
@@ -45,6 +46,15 @@ public abstract class BaseRoute extends RouteBuilder {
     protected final RouteLoggingProcessor   routeLoggingProcessor;
     protected final RouteExceptionProcessor exceptionProcessor;
 
+    @Value("${http.client.retry.max-attempts:1}")
+    private int maxAttempts;
+
+    @Value("${http.client.retry.initial-delay-ms:1000}")
+    private long retryInitialDelayMs;
+
+    @Value("${http.client.retry.backoff-multiplier:2.0}")
+    private double retryBackoffMultiplier;
+
     protected BaseRoute(CorrelationIdProcessor  correlationIdProcessor,
                         RouteLoggingProcessor   routeLoggingProcessor,
                         RouteExceptionProcessor exceptionProcessor) {
@@ -74,9 +84,9 @@ public abstract class BaseRoute extends RouteBuilder {
         // Must be declared BEFORE KrakenBaseException — RetryableException is a subclass and
         // would otherwise be swallowed by the KrakenBaseException handler (HTTP 500, no retry).
         route.onException(RetryableException.class)
-            .maximumRedeliveries(3)
-            .redeliveryDelay(1_000)
-            .backOffMultiplier(2)
+            .maximumRedeliveries(maxRedeliveries())
+            .redeliveryDelay(retryInitialDelayMs)
+            .backOffMultiplier(retryBackoffMultiplier)
             .useExponentialBackOff()
             .retryAttemptedLogLevel(LoggingLevel.WARN)
             .handled(true)
@@ -92,9 +102,9 @@ public abstract class BaseRoute extends RouteBuilder {
 
         // Catch-all for unexpected transient failures — same retry behaviour as RetryableException.
         route.onException(Exception.class)
-            .maximumRedeliveries(3)
-            .redeliveryDelay(1_000)
-            .backOffMultiplier(2)
+            .maximumRedeliveries(maxRedeliveries())
+            .redeliveryDelay(retryInitialDelayMs)
+            .backOffMultiplier(retryBackoffMultiplier)
             .useExponentialBackOff()
             .retryAttemptedLogLevel(LoggingLevel.WARN)
             .handled(true)
@@ -108,5 +118,9 @@ public abstract class BaseRoute extends RouteBuilder {
         businessSteps.accept(route);
 
         route.process(routeLoggingProcessor.exit(operation));
+    }
+
+    private int maxRedeliveries() {
+        return Math.max(maxAttempts - 1, 0);
     }
 }

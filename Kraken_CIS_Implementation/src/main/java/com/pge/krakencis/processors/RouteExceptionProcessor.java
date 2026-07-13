@@ -104,9 +104,21 @@ public class RouteExceptionProcessor {
             detail.put("retriesAttempted", retries);
             detail.put("cause", ex != null ? ex.getMessage() : "Unknown error");
 
-            respond(exchange, 503, "SYS-001",
-                "Service temporarily unavailable after " + retries + " retry attempt(s)",
-                detail);
+            String code = "SYS-001";
+            String message = "Service temporarily unavailable after " + retries + " retry attempt(s)";
+
+            if (ex instanceof KrakenBaseException krakenEx) {
+                code = krakenEx.getErrorCode().getCode();
+                message = krakenEx.getMessage();
+                detail.putAll(krakenEx.getContext());
+            }
+
+            if (operation != null && operation.startsWith("postOnDemandRead")) {
+                respondSoapFault(exchange, 500, code, message, detail);
+                return;
+            }
+
+            respond(exchange, 503, code, message, detail);
         };
     }
 
@@ -134,5 +146,45 @@ public class RouteExceptionProcessor {
         exchange.getIn().setBody(errorResponse);
         exchange.getIn().setHeader(Exchange.HTTP_RESPONSE_CODE, httpStatus);
         exchange.getIn().setHeader(Exchange.CONTENT_TYPE, "application/json");
+    }
+
+    private void respondSoapFault(Exchange exchange, int httpStatus,
+                                  String code, String message, Object detail) {
+
+        String correlationId = exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class);
+        String faultMessage = message != null ? message : "OnDemandRead request failed";
+
+        String body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\">\n"
+            + "  <soapenv:Header/>\n"
+            + "  <soapenv:Body>\n"
+            + "    <soapenv:Fault>\n"
+            + "      <faultcode>soapenv:Server</faultcode>\n"
+            + "      <faultstring>" + escapeXml(faultMessage) + "</faultstring>\n"
+            + "      <detail>\n"
+            + "        <errorCode>" + escapeXml(code) + "</errorCode>\n"
+            + "        <correlationId>" + escapeXml(correlationId) + "</correlationId>\n"
+            + "        <timestamp>" + OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME) + "</timestamp>\n"
+            + "        <diagnostic>" + escapeXml(String.valueOf(detail)) + "</diagnostic>\n"
+            + "      </detail>\n"
+            + "    </soapenv:Fault>\n"
+            + "  </soapenv:Body>\n"
+            + "</soapenv:Envelope>";
+
+        exchange.getIn().setBody(body);
+        exchange.getIn().setHeader(Exchange.HTTP_RESPONSE_CODE, httpStatus);
+        exchange.getIn().setHeader(Exchange.CONTENT_TYPE, "text/xml; charset=utf-8");
+    }
+
+    private String escapeXml(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;");
     }
 }
