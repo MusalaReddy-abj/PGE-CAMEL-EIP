@@ -66,6 +66,9 @@ public class ProfileReadsWorkConsumer extends BaseKafkaConsumerRoute {
     @Value("${profile-reads.work.max-poll-records:5}")
     private int maxPollRecords;
 
+    @Value("${profile-reads.work.max-poll-interval-ms:1800000}")
+    private int maxPollIntervalMs;
+
     public ProfileReadsWorkConsumer(CorrelationIdProcessor   correlationIdProcessor,
                                     RouteLoggingProcessor    routeLoggingProcessor,
                                     RouteExceptionProcessor  exceptionProcessor,
@@ -90,7 +93,7 @@ public class ProfileReadsWorkConsumer extends BaseKafkaConsumerRoute {
             + "&maxPollRecords=" + maxPollRecords
             + "&autoCommitEnable=false&allowManualCommit=true"
             + "&consumersCount={{kafka.consumer.consumers-count:1}}"
-            + "&maxPollIntervalMs={{kafka.consumer.max-poll-interval-ms:300000}}"
+            + "&maxPollIntervalMs=" + maxPollIntervalMs
             + "&heartbeatIntervalMs={{kafka.consumer.heartbeat-interval-ms:10000}}"
             + securityQueryString();
 

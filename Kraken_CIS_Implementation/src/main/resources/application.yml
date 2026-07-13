@@ -77,7 +77,8 @@ profile-reads:
   ingestion:
     mode: work-queue
   work:
-    max-poll-records: 5    # files processed per poll before commit (keep modest — files are heavy)
+    max-poll-records: 1    # process one file per poll; files can be large/heavy
+    max-poll-interval-ms: 1800000  # allow up to 30 min to process a large file before Kafka rebalances
 
 ftp:
   listener:

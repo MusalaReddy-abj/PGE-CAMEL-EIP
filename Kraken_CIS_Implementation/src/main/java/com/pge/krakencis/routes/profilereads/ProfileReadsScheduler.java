@@ -10,8 +10,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.util.ArrayList;
@@ -80,7 +83,11 @@ public class ProfileReadsScheduler extends RouteBuilder {
             String key = obj.key();
             // Only real .csv files — skip the folder/.keep placeholder objects.
             if (key.toLowerCase().endsWith(".csv")) {
-                items.add(new ProfileReadsWorkItem(bucket, key, fileNameFrom(key)));
+                String fileName = fileNameFrom(key);
+                String processingKey = s3Properties.getProcessingPrefix() + fileName;
+                if (claimFile(bucket, key, processingKey)) {
+                    items.add(new ProfileReadsWorkItem(bucket, processingKey, fileName));
+                }
             }
         }
 
@@ -96,6 +103,31 @@ public class ProfileReadsScheduler extends RouteBuilder {
         exchange.setProperty(LogConstants.KAFKA_TOPIC,        workTopic);
         exchange.setProperty(LogConstants.KAFKA_KEY,          item.fileName());   // duplicates → same partition
         exchange.setProperty(LogConstants.PROP_CORRELATION_ID, item.fileName());  // trace by file
+    }
+
+    private boolean claimFile(String bucket, String sourceKey, String processingKey) {
+        try {
+            s3Client.copyObject(CopyObjectRequest.builder()
+                .sourceBucket(bucket)
+                .sourceKey(sourceKey)
+                .destinationBucket(bucket)
+                .destinationKey(processingKey)
+                .build());
+            s3Client.deleteObject(DeleteObjectRequest.builder()
+                .bucket(bucket)
+                .key(sourceKey)
+                .build());
+            log.info("profileReadsFileClaimed", null,
+                "sourceKey", sourceKey, "processingKey", processingKey);
+            return true;
+        } catch (NoSuchKeyException e) {
+            log.info("profileReadsClaimSkippedAlreadyClaimed", null, "sourceKey", sourceKey);
+            return false;
+        } catch (Exception e) {
+            log.warn("profileReadsClaimFailed", null,
+                "sourceKey", sourceKey, "processingKey", processingKey, "error", e.getMessage());
+            return false;
+        }
     }
 
     private static String fileNameFrom(String s3Key) {

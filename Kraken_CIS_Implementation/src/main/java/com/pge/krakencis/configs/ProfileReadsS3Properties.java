@@ -37,6 +37,7 @@ public class ProfileReadsS3Properties {
     private S3ConnectionProperties connection         = new S3ConnectionProperties();
     private String                 bucketName         = "kraken-profile-reads";
     private String                 sourcePrefix       = "incoming/";
+    private String                 processingPrefix   = "processing/";
     private String                 archivePrefix      = "archive/";
     private String                 errorPrefix        = "error/";
     private int                    delayMs            = 60_000;

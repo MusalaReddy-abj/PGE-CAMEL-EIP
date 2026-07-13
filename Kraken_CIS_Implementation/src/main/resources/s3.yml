@@ -8,6 +8,7 @@ aws:
         use-default-credentials: true
       bucket-name: pge-int-demo
       source-prefix: Reads/profilereads/    # matches s3://pge-int-demo/Reads/profilereads/
+      processing-prefix: Reads/Processing/   # claimed files move here before work item publish
       archive-prefix: Reads/Archive/         # matches s3://pge-int-demo/Reads/Archive/
       error-prefix: Reads/Error/             # matches s3://pge-int-demo/Reads/Error/
       delay-ms: 60000
