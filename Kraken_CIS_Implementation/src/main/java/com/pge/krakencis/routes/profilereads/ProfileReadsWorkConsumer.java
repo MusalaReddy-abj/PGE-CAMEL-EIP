@@ -110,7 +110,14 @@ public class ProfileReadsWorkConsumer extends BaseKafkaConsumerRoute {
         route
             .process(com.pge.krakencis.logging.KafkaTraceContext::adopt)
             .process(this::parseWorkItem)
+            .process(exchange -> log.info("profileReadsWorkFetchStarted",
+                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                "key", exchange.getProperty(PROP_S3_KEY, String.class)))
             .process(this::fetchFromS3)
+            .process(exchange -> log.info("profileReadsWorkFetchCompleted",
+                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                "key", exchange.getProperty(PROP_S3_KEY, String.class),
+                "skip", exchange.getProperty(PROP_SKIP, false, Boolean.class)))
             .choice()
                 // Idempotent skip: a prior work-item already processed + archived this file.
                 .when(exchangeProperty(PROP_SKIP).isEqualTo(true))
@@ -118,13 +125,33 @@ public class ProfileReadsWorkConsumer extends BaseKafkaConsumerRoute {
                     .stop()
             .end()
             .process(routeLoggingProcessor.entry(OPERATION))
+            .process(exchange -> log.info("profileReadsWorkCsvStarted",
+                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                "key", exchange.getProperty(PROP_S3_KEY, String.class)))
             .process(csvProcessor)
+            .process(exchange -> log.info("profileReadsWorkCsvCompleted",
+                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                "totalRows", exchange.getProperty(LogConstants.PROP_TOTAL_ROWS),
+                "successRows", exchange.getProperty(LogConstants.PROP_SUCCESS_ROWS)))
             .setProperty(LogConstants.KAFKA_TOPIC, constant(profileReadsTopic))
+            .process(exchange -> log.info("profileReadsWorkPublishStarted",
+                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                "topic", profileReadsTopic))
             .to("direct:publishToKafka")
+            .process(exchange -> log.info("profileReadsWorkPublishCompleted",
+                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                "topic", profileReadsTopic,
+                "publishedCount", exchange.getIn().getBody()))
             .to("direct:publishProfileReadsDlq")
             .setProperty("profileReads.source", constant("S3"))
             .to("direct:publishProfileReadsAudit")
+            .process(exchange -> log.info("profileReadsWorkArchiveStarted",
+                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                "key", exchange.getProperty(PROP_S3_KEY, String.class)))
             .process(this::moveToArchive)
+            .process(exchange -> log.info("profileReadsWorkArchiveCompleted",
+                exchange.getProperty(LogConstants.PROP_CORRELATION_ID, String.class),
+                "key", exchange.getProperty(PROP_S3_KEY, String.class)))
             .process(routeLoggingProcessor.exit(OPERATION))
             .process(this::commitOffset);
     }
@@ -210,10 +237,18 @@ public class ProfileReadsWorkConsumer extends BaseKafkaConsumerRoute {
         if (sourceKey != null) {
             String errorKey = s3Properties.getErrorPrefix() + fileNameFrom(sourceKey);
             try {
+                log.warn("profileReadsWorkErrorMoveStarted", correlationId,
+                    "sourceKey", sourceKey, "errorKey", errorKey);
                 copyAndDelete(bucket, sourceKey, errorKey);
+                log.warn("profileReadsWorkErrorMoved", correlationId,
+                    "sourceKey", sourceKey, "errorKey", errorKey);
             } catch (Exception e) {
-                log.error("profileReadsWorkErrorMoveFailed", correlationId, e, "sourceKey", sourceKey);
+                log.error("profileReadsWorkErrorMoveFailed", correlationId, e,
+                    "sourceKey", sourceKey, "errorKey", errorKey);
             }
+        } else {
+            log.error("profileReadsWorkErrorMoveSkipped", correlationId,
+                "reason", "missingSourceKey");
         }
 
         // Publish a file-level audit (same contract as the poller's corrupted-file audit).
@@ -224,8 +259,15 @@ public class ProfileReadsWorkConsumer extends BaseKafkaConsumerRoute {
         if (exchange.getIn().getHeader(Exchange.FILE_NAME) == null && sourceKey != null) {
             exchange.getIn().setHeader(Exchange.FILE_NAME, fileNameFrom(sourceKey));
         }
-        exchange.getContext().createProducerTemplate()
-            .send("direct:publishProfileReadsAudit", exchange);
+        try {
+            exchange.getContext().createProducerTemplate()
+                .send("direct:publishProfileReadsAudit", exchange);
+            log.info("profileReadsWorkErrorAuditPublished", correlationId,
+                "key", sourceKey, "status", status);
+        } catch (Exception e) {
+            log.error("profileReadsWorkErrorAuditFailed", correlationId, e,
+                "key", sourceKey, "status", status);
+        }
     }
 
     // ── S3 helpers ─────────────────────────────────────────────────────────────
